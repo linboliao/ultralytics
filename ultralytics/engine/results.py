@@ -34,7 +34,7 @@ class BaseTensor(SimpleClass):
         to: Return a copy of the tensor with the specified device and dtype.
 
     Examples:
-        >>> import torch
+        >>> import torch+
         >>> data = torch.tensor([[1, 2, 3], [4, 5, 6]])
         >>> orig_shape = (720, 1280)
         >>> base_tensor = BaseTensor(data, orig_shape)
@@ -534,7 +534,23 @@ class Results(SimpleClass):
 
         # Plot Detect results
         if pred_boxes is not None and show_boxes:
+            # indexes = []
+            # for i, d1 in enumerate(reversed(pred_boxes)):
+            #     for j, d2 in enumerate(reversed(pred_boxes)):
+            #         if j <= i:
+            #             continue
+            #         x, y, w, h = d1.xywh[0]
+            #         x1, y1, x2, y2 = x - w / 2, y - h / 2, x + w / 2, y + h / 2
+            #         x, y, w, h = d2.xywh[0]
+            #         x3, y3, x4, y4 = x - w / 2, y - h / 2, x + w / 2, y + h / 2
+            #         if x1 * 0.95 <= x3 and y1 * 0.95 <= y3 and x2 * 1.05 >= x4 and y2 * 1.05 >= y4 and d1.cls == d2.cls:
+            #             indexes.append(j)
+            #         elif x1 >= x3 * 0.95 and y1 >= y3 * 0.95 and x2 <= x4 * 1.05 and y2 <= y4 * 1.05 and d1.cls == d2.cls:
+            #             indexes.append(i)
+
             for i, d in enumerate(reversed(pred_boxes)):
+                # if i in indexes:
+                #     continue
                 c, d_conf, id = int(d.cls), float(d.conf) if conf else None, None if d.id is None else int(d.id.item())
                 name = ("" if id is None else f"id:{id} ") + names[c]
                 label = (f"{name} {d_conf:.2f}" if conf else name) if labels else None
