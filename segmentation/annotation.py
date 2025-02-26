@@ -21,6 +21,8 @@ sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
 from aslide import Aslide
 
 MIN_AREA = 3000
+
+
 def is_background(img, threshold=5):
     img_array = np.array(img)
     pixel_max = np.max(img_array, axis=2)
@@ -28,7 +30,8 @@ def is_background(img, threshold=5):
     difference = pixel_max - pixel_min
     tissue_percent = np.sum(difference > threshold) / (img_array.shape[0] * img_array.shape[1])
 
-    return tissue_percent < 0.05
+    return tissue_percent < 0.1
+
 
 class Annotation:
     def __init__(self, opt):
@@ -250,8 +253,7 @@ class GeoAnnotation(Annotation):
 class LMAnnotation(Annotation):
     def __init__(self, opt):
         super().__init__(opt)
-        # self.lm_ann_dir = os.path.join(self.output_dir, f'lm_annotations/')
-        self.lm_ann_dir = '/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/data4/'
+        self.lm_ann_dir = '/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/labelme/250224'
         self.label_dir = os.path.join(self.output_dir, f'labels/')
         self.image_dir = os.path.join(self.output_dir, f'images/')
         os.makedirs(self.label_dir, exist_ok=True)
@@ -270,26 +272,32 @@ class LMAnnotation(Annotation):
                     clazz = 0
                 elif shape.get('label') == 'cancer':
                     clazz = 1
+                elif shape.get('label') == '电切烧灼腺体':
+                    clazz = 2
+                elif shape.get('label') == '血管':
+                    clazz = 3
+                elif shape.get('label') == '鳞状上皮':
+                    clazz = 4
+                elif shape.get('label') == '神经节':
+                    clazz = 5
                 if shape.get('shape_type') == 'polygon':
                     points = shape.get('points')
-                    points = [item / 1024 for sublist in points for item in sublist]
+                    points = [item / self.patch_size for sublist in points for item in sublist]
                 elif shape.get('shape_type') == 'rectangle':
                     points = shape.get('points')
                     [x1, y1], [x2, y2] = points[0], points[1]
-                    points = [x1 / 1024, y1 / 1024, x1 / 1024, y2 / 1024, x2 / 1024, y2 / 1024, x2 / 1024, y1 / 1024]
+                    points = [x1 / self.patch_size, y1 / self.patch_size, x1 / self.patch_size, y2 / self.patch_size, x2 / self.patch_size, y2 / self.patch_size, x2 / self.patch_size, y1 / self.patch_size]
                 contours_str = ' '.join(map(str, points))
                 line = f'{clazz} {contours_str}'
                 f.write(line + '\n')
-        img_name = f'{base}.png'
-        # shutil.copy(os.path.join(self.lm_ann_dir, img_name), os.path.join(self.image_dir, f'{base}.png'))
-        shutil.copy(os.path.join(self.lm_ann_dir, img_name), os.path.join(self.image_dir, img_name))
+        shutil.copy(os.path.join(self.lm_ann_dir, patch), os.path.join(self.image_dir, patch))
 
     def run(self, slide: str):
         self.get_contours(slide)
 
     def parallel_run(self):
         images = os.listdir(self.lm_ann_dir)
-        images = [img for img in images if img.endswith('.png')]
+        images = [img for img in images if img.endswith('.jpg')]
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = [executor.submit(self.run, img) for img in images]
             for future in as_completed(futures):
@@ -303,14 +311,20 @@ class YOLOAnnotation(Annotation):
     def __init__(self, opt):
         super().__init__(opt)
         self.patch_level = opt.patch_level
-        self.slide_dir = opt.slide_dir if opt.slide_dir else os.path.join(opt.data_root, f'slides')
+        self.slide_dir = opt.slide_dir if opt.slide_dir else os.path.join(opt.data_root, f'test/0224')
         self.slide_list = opt.slide_list
         self.gpu_ids = opt.gpu_ids
 
         self.model = YOLO(opt.ckpt)
-        self.label_dict = {0: 'prostate', 1: 'cancer'}
-        self.color_dict = {'prostate': [255, 0, 0], 'cancer': [0, 255, 0]}
-        self.features = []
+        self.label_dict = {0: 'prostate', 1: 'cancer', 2: 'burn', 3: 'vessel', 4: 'epithelium', 5: 'ganglion'}
+        self.color_dict = {
+            'prostate': [0, 255, 0],  # 红色
+            'cancer': [255, 0, 0],  # 绿色
+            'burn': [0, 0, 255],  # 蓝色
+            'vessel': [255, 255, 0],  # 黄色
+            'epithelium': [255, 0, 255],  # 紫色
+            'ganglion': [0, 255, 255]  # 青色
+        }
 
     def inference(self, img):
         results = self.model(img, device=self.gpu_ids)
@@ -325,7 +339,8 @@ class YOLOAnnotation(Annotation):
                 labels.append(label)
         return coords, labels
 
-    def qupath_feature(self, coords, labels):
+    def qupath_feature(self, coords, labels, base):
+        features = []
         for coord, label in zip(coords, labels):
             feature = {
                 "type": "Feature",
@@ -340,64 +355,93 @@ class YOLOAnnotation(Annotation):
                 "objectType": "annotation",
                 "classification": {"name": label, "color": self.color_dict[label]}
             }})
-            self.features.append(feature)
-
-    def patch_process(self, slide):
-        base, ext = os.path.splitext(slide)
-        slide_path = os.path.join(self.slide_dir, slide)
-        wsi = Aslide(slide_path) if ext == '.kfb' else openslide.open_slide(slide_path)
-        [w, h] = wsi.level_dimensions[self.patch_level]
-        step = int(self.patch_size)
-        for w_s in range(0, w, step):
-            for h_s in range(0, h, step):
-                input_img = wsi.read_region((w_s, h_s), self.patch_level, (min(self.patch_size, w - w_s), min(self.patch_size, h - h_s)))
-                if is_background(input_img):
-                    continue
-                if isinstance(input_img, Image.Image):
-                    input_img = input_img.convert('RGB')
-                    input_img = input_img.resize((1024, 1024))
-                else:
-                    input_img = cv2.resize(input_img, (1024, 1024), interpolation=cv2.INTER_LINEAR)
-                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
-                coords, labels = self.inference(input_img)
-                new_coords = []
-                for (x1, y1, x2, y2) in coords:
-                    x1 = int(x1 * 2 + w_s)
-                    y1 = int(y1 * 2 + h_s)
-                    x2 = int(x2 * 2 + w_s)
-                    y2 = int(y2 * 2 + h_s)
-                    new_coords.append([[[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]])
-
-                self.qupath_feature(new_coords, labels)
-        geojson = {"type": "FeatureCollection", "features": self.features}
+            features.append(feature)
+        geojson = {"type": "FeatureCollection", "features": features}
         with open(os.path.join(self.output_dir, f'{base}.geojson'), 'w') as f:
             json.dump(geojson, f, indent=2)
             logger.info(f'generated {base}.geojson contour json!!!')
 
+    def patch_process(self, slide):
+        patch_level = 0
+
+        base, ext = os.path.splitext(slide)
+        slide_path = os.path.join(self.slide_dir, slide)
+        wsi = Aslide(slide_path) if ext == '.kfb' else openslide.open_slide(slide_path)
+        if wsi.mpp == 40:
+            patch_level = 1
+        elif wsi.mpp == 80:
+            patch_level = 2
+        [w, h] = wsi.level_dimensions[patch_level]
+
+        step = int(self.patch_size)
+        t_coords, t_labels = [], []
+        for w_s in range(0, w - step, step):
+            for h_s in range(0, h - step, step):
+                input_img = wsi.read_region((w_s, h_s), patch_level, (self.patch_size, self.patch_size))
+                if is_background(input_img):
+                    continue
+                if isinstance(input_img, Image.Image):
+                    input_img = input_img.convert('RGB')
+                    input_img = input_img.resize((1536, 1536))
+                else:
+                    input_img = cv2.resize(input_img, (1536, 1536), interpolation=cv2.INTER_LINEAR)
+                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
+                coords, labels = self.inference(input_img)
+                new_coords = []
+                for (x1, y1, x2, y2) in coords:
+                    x1 = int(x1 * 1.33333 + w_s) * wsi.level_downsamples[patch_level]
+                    y1 = int(y1 * 1.33333 + h_s) * wsi.level_downsamples[patch_level]
+                    x2 = int(x2 * 1.33333 + w_s) * wsi.level_downsamples[patch_level]
+                    y2 = int(y2 * 1.33333 + h_s) * wsi.level_downsamples[patch_level]
+                    new_coords.append([[[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]])
+                t_coords += new_coords
+                t_labels += labels
+
+        self.qupath_feature(t_coords, t_labels, base)
+
+    @property
+    def slides(self):
+        if self.slide_list:
+            slides = self.slide_list
+        else:
+            slides = [f for f in os.listdir(self.slide_dir) if os.path.isfile(os.path.join(self.slide_dir, f))]
+        return slides
+
     def run_(self):
-        for slide in self.slide_list:
+        for slide in self.slides:
             self.patch_process(slide)
+
+    def parallel_run(self):
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(self.patch_process, slide) for slide in self.slides]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    traceback.print_exc()
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--ckpt', type=str, default='/NAS2/Data1/lbliao/Code/ultralytics/runs/detect/train3/weights/last.pt')
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Repeat/2024-12-10/', help='patch directory')
-parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
+parser.add_argument('--ckpt', type=str, default='/data2/lbliao/Code/ultralytics/runs/detect/train5/weights/best.pt')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel', help='patch directory')
+parser.add_argument('--gpu_ids', type=str, default='1', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Repeat/result/', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/result/0224/', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=1024, help='output size')
 parser.add_argument('--skip_done', action='store_true', help='skip done')
-# parser.add_argument('--slide_list', type=list, default=['1903106.4.svs', '164701.16.svs', '1638897.11.svs', '1638897.9.svs', '1547583.10.svs', '1740359.6.svs', '1547583.13.svs','1858614.3.svs']])
-# parser.add_argument('--slide_list', type=list, default=['1638897.12.svs', '1636600.10.svs', '1547583.18.svs'])
-parser.add_argument('--slide_list', type=list, default=['202303007A2.kfb'])
-# parser.add_argument('--slide_list', type=list)
+# parser.add_argument('--slide_list', type=list,
+#                     default=['122655.22024-11-01_15_54_23.kfb', '13521N2024-11-01_15_50_35.kfb', '14228N2024-11-01_15_45_17.kfb', '1527467N2024-11-01_14_18_36.kfb', '1536401N2024-11-01_14_38_56.kfb', '1537852N2024-11-01_14_33_16.kfb',
+#                              '1539289N2024-11-01_16_15_14.kfb', '1540421N2024-11-01_16_12_52.kfb', '1604428.52024-11-01_14_14_14.kfb', '1734377.32024-11-01_15_18_28.kfb', '202304818I12024-11-12_13_14_11.kfb', '202305993I12024-11-12_13_19_29.kfb',
+#                              '202310971A32024-11-20_11_33_01.kfb', '202310971B12024-11-20_11_34_14.kfb', '202310971B42024-11-20_11_35_39.kfb', '202310971D32024-11-12_13_22_26.kfb', '202310971D52024-11-12_13_24_02.kfb', '202311058B72024-11-12_13_26_46.kfb',
+#                              '202312644J12024-11-20_11_36_57.kfb'])
+parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
     # GeoAnnotation(args).parallel_run()
     # LMAnnotation(args).parallel_run()
-    YOLOAnnotation(args).run_()
+    YOLOAnnotation(args).parallel_run()

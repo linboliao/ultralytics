@@ -1364,17 +1364,22 @@ class RandomHSV:
         """
         img = labels["img"]
         if self.hgain or self.sgain or self.vgain:
-            r = np.random.uniform(-1, 1, 3) * [self.hgain, self.sgain, self.vgain] + 1  # random gains
-            hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
-            dtype = img.dtype  # uint8
+            imgs = []
+            for i in range(0, 14, 3):
+                t_img = img[:, :, i:i+3]
+                r = np.random.uniform(-1, 1, 3) * [self.hgain, self.sgain, self.vgain] + 1  # random gains
+                hue, sat, val = cv2.split(cv2.cvtColor(t_img, cv2.COLOR_BGR2HSV))
+                dtype = img.dtype  # uint8
 
-            x = np.arange(0, 256, dtype=r.dtype)
-            lut_hue = ((x * r[0]) % 180).astype(dtype)
-            lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
-            lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
+                x = np.arange(0, 256, dtype=r.dtype)
+                lut_hue = ((x * r[0]) % 180).astype(dtype)
+                lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
+                lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
 
-            im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
-            cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
+                im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
+                t_img = cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR)  # no return needed
+                imgs.append(t_img)
+            labels["img"] = np.dstack(imgs)
         return labels
 
 
@@ -1912,7 +1917,12 @@ class Albumentations:
                     bboxes = np.array(new["bboxes"], dtype=np.float32)
                 labels["instances"].update(bboxes=bboxes)
         else:
-            labels["img"] = self.transform(image=labels["img"])["image"]  # transformed
+            img = labels['img']
+            imgs = []
+            for i in range(0, 14, 3):
+                t_img = img[:, :, i:i+3]
+                imgs.append(self.transform(image=t_img)["image"])
+            labels["img"] = np.dstack(imgs) # transformed
 
         return labels
 

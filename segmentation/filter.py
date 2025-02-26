@@ -86,6 +86,8 @@ def ann_filter():
             os.remove(os.path.join(he_dir, he))
             os.remove(ann_path)
             logger.info(f'{he}没有腺体')
+
+
 # ann_filter()
 
 # 图像大小过滤
@@ -135,10 +137,10 @@ def size_filter1():
 
 # 指定你的文件夹路径
 def split_data():
-    he_dir = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/data3/images'
-    ann_path = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/data3/labels/'
+    he_dir = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/images_2048'
+    ann_path = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/labels_2048/'
 
-    img_dir = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/data5/'
+    img_dir = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/2048/'
     os.makedirs(img_dir, exist_ok=True)
 
     he_imgs = os.listdir(he_dir)
@@ -182,7 +184,6 @@ def img_resize():
 
 
 # img_resize()
-
 
 
 # split_data()
@@ -283,5 +284,24 @@ def my_test():
         elif file.endswith('.png'):
             os.rename(file_path, os.path.join(img_dir, file))
 
+
 split_data()
 # my_test()
+
+def my_test2():
+    ann_path = '/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/labels_2048'
+    img_path = '/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/images_2048'
+    imgs = os.listdir(img_path)
+    for img in imgs:
+        base, _ = os.path.splitext(img)
+        if not os.path.isfile(os.path.join(ann_path, f'{base}.txt')):
+            os.remove(os.path.join(img_path, img))
+            logger.info(f'remove image {img}')
+    anns = os.listdir(ann_path)
+    for ann in anns:
+        base, _ = os.path.splitext(ann)
+        if not os.path.isfile(os.path.join(ann_path, f'{base}.txt')):
+            os.remove(os.path.join(ann_path, ann))
+            logger.info(f'remove ann {ann}')
+
+# my_test2()

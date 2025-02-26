@@ -169,7 +169,12 @@ class BaseDataset(Dataset):
                 r = self.imgsz / max(h0, w0)  # ratio
                 if r != 1:  # if sizes are not equal
                     w, h = (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz))
-                    im = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
+                    im1 = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
+                    top_left = im[:1024, :1024, :]
+                    top_right = im[:1024, 1024:, :]
+                    bottom_left = im[1024:, :1024, :]
+                    bottom_right = im[1024:, 1024:, :]
+                    im = np.dstack([top_left, top_right, bottom_left, bottom_right, im1])
             elif not (h0 == w0 == self.imgsz):  # resize by stretching image to square imgsz
                 im = cv2.resize(im, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
 

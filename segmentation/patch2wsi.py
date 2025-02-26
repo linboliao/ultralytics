@@ -27,7 +27,7 @@ parser.add_argument('--overlap', type=float, default=0)
 parser.add_argument('--slide_dir', type=str)
 
 args = parser.parse_args()
-args.slide_list = ['202303007A2.kfb']
+args.slide_list = ['13521N2024-11-01_15_50_35.svs']
 
 model = YOLO(args.ckpt)
 
@@ -98,55 +98,6 @@ class Patch2WSI:
             canvas = Image.fromarray(canvas)
             # canvas.thumbnail((w // 10, h // 10))
             canvas.save(output_path)
-
-    def save_fake_patch(self, slide):
-        target_patch_size = 10000
-        base, ext = os.path.splitext(slide)
-        slide_path = os.path.join(self.slide_dir, slide)
-        wsi = Aslide(slide_path) if ext == '.kfb' else openslide.open_slide(slide_path)
-        [w, h] = wsi.level_dimensions[self.patch_level]
-        logger.info(f'{slide} width {w} height {h}')
-        for h_s in range(0, h, target_patch_size):
-            for w_s in range(0, w, target_patch_size):
-                output_path = os.path.join(self.output_dir, f'{base}_{w_s}_{h_s}.png')
-                canvas = np.full([target_patch_size, target_patch_size, 3], (255, 255, 255), dtype=np.uint8)
-                step = int(self.patch_size * (1 - self.overlap))
-                h_i = 0
-                while h_i < target_patch_size:
-                    if h - h_s - h_i <= 0:
-                        h_i += step
-                        continue
-                    w_i = 0
-                    while w_i < target_patch_size:
-                        if w - w_s - w_i <= 0:
-                            w_i += step
-                            continue
-                        img_real = wsi.read_region((w_i + w_s, h_i + h_s), self.patch_level, (min(self.patch_size, w - w_s - w_i), min(self.patch_size, h - h_s - h_i)))
-                        if isinstance(img_real, Image.Image):
-                            img_real = img_real.convert('RGB')
-
-                        data = {
-                            'inst': torch.tensor([0]),
-                            'image': torch.tensor([0]),
-                            'feat': torch.tensor([0]),
-                            'path': 'None',
-                            'label': transform(img_real).unsqueeze(0)
-                        }
-                        h_step = min(min(self.patch_size, target_patch_size - h_i), h - h_s - h_i)
-                        w_step = min(min(self.patch_size, target_patch_size - w_i), w - w_s - w_i)
-                        if is_background(img_real):
-                            canvas[h_i:h_i + h_step, w_i:w_i + w_step] = np.array(img_real)[0:h_step, 0:w_step]
-                        else:
-                            generated = model.inference(data['label'], data['inst'], data['image'])
-                            img_fake = util.tensor2im(generated.data[0])
-                            fake_patch = canvas[h_i:h_i + h_step, w_i:w_i + w_step]
-                            index_overlap = np.where(fake_patch != 255)
-                            img_fake[index_overlap] = img_fake[index_overlap] * 0.5 + fake_patch[index_overlap] * 0.5
-                            canvas[h_i:h_i + h_step, w_i:w_i + w_step] = np.array(img_fake)[0:h_step, 0:w_step]
-                        w_i += step
-                    h_i += step
-                canvas = Image.fromarray(canvas)
-                canvas.save(output_path)
 
     @property
     def slides(self):

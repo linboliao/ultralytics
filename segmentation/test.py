@@ -52,7 +52,14 @@ for img in images:
     flag = False
     for result in results:
         boxes = result.boxes  # Boxes object for bounding box outputs
-        indexes = []
+        masks = result.masks  # Masks object for segmentation masks outputs
+        keypoints = result.keypoints  # Keypoints object for pose outputs
+        probs = result.probs  # Probs object for classification outputs
+        obb = result.obb  # Oriented boxes object for OBB outputs
+        # result.show()  # display to screen
+        result.save(filename=os.path.join(args.output_dir, img))  # save to disk
+        # boxes = result.boxes  # Boxes object for bounding box outputs
+        # indexes = []
         # for i, d1 in enumerate(reversed(boxes)):
         #     for j, d2 in enumerate(reversed(boxes)):
         #         if j <= i:
@@ -65,34 +72,34 @@ for img in images:
         #             indexes.append(j)
         #         elif x1 >= x3 * 0.95 and y1 >= y3 * 0.95 and x2 <= x4 * 1.05 and y2 <= y4 * 1.05 and d1.cls == d2.cls:
         #             indexes.append(i)
-
-        for i, box in enumerate(reversed(boxes)):
-            # if i in indexes:
-            #     continue
-            [x1, y1, x2, y2] = box.xyxy.tolist()[0]
-            points = [[x1, y1], [x2, y2]]
-            shapes.append({
-                "label": label_dict[int(box.cls.tolist()[0])],
-                "points": points,
-                "group_id": None,
-                "description": "",
-                "shape_type": "rectangle",
-                "flags": {},
-                "mask": None
-            })
-            if label_dict[int(box.cls.tolist()[0])] == 'cancer':
-                flag = True
-    ann = {
-        "version": "5.6.0",
-        "flags": {},
-        "shapes": shapes,
-        "imagePath": img,
-        "imageData": None,
-        "imageHeight": img_f.height,
-        "imageWidth": img_f.width,
-    }
-    if not flag :
-        continue
-    with open(os.path.join(args.output_dir, f'{base}.json'), 'w') as f:
-        json.dump(ann, f, indent=2)
-    shutil.copy(img_path, os.path.join(args.output_dir, img))
+    #
+    #     for i, box in enumerate(reversed(boxes)):
+    #         # if i in indexes:
+    #         #     continue
+    #         [x1, y1, x2, y2] = box.xyxy.tolist()[0]
+    #         points = [[x1, y1], [x2, y2]]
+    #         shapes.append({
+    #             "label": label_dict[int(box.cls.tolist()[0])],
+    #             "points": points,
+    #             "group_id": None,
+    #             "description": "",
+    #             "shape_type": "rectangle",
+    #             "flags": {},
+    #             "mask": None
+    #         })
+    #         if label_dict[int(box.cls.tolist()[0])] == 'cancer':
+    #             flag = True
+    # ann = {
+    #     "version": "5.6.0",
+    #     "flags": {},
+    #     "shapes": shapes,
+    #     "imagePath": img,
+    #     "imageData": None,
+    #     "imageHeight": img_f.height,
+    #     "imageWidth": img_f.width,
+    # }
+    # if not flag :
+    #     continue
+    # with open(os.path.join(args.output_dir, f'{base}.json'), 'w') as f:
+    #     json.dump(ann, f, indent=2)
+    # shutil.copy(img_path, os.path.join(args.output_dir, img))
