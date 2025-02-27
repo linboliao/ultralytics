@@ -47,20 +47,20 @@ class BaseDataset(Dataset):
     """
 
     def __init__(
-        self,
-        img_path,
-        imgsz=640,
-        cache=False,
-        augment=True,
-        hyp=DEFAULT_CFG,
-        prefix="",
-        rect=False,
-        batch_size=16,
-        stride=32,
-        pad=0.5,
-        single_cls=False,
-        classes=None,
-        fraction=1.0,
+            self,
+            img_path,
+            imgsz=640,
+            cache=False,
+            augment=True,
+            hyp=DEFAULT_CFG,
+            prefix="",
+            rect=False,
+            batch_size=16,
+            stride=32,
+            pad=0.5,
+            single_cls=False,
+            classes=None,
+            fraction=1.0,
     ):
         """Initialize BaseDataset with given configuration and options."""
         super().__init__()
@@ -169,12 +169,19 @@ class BaseDataset(Dataset):
                 r = self.imgsz / max(h0, w0)  # ratio
                 if r != 1:  # if sizes are not equal
                     w, h = (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz))
-                    im1 = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
-                    top_left = im[:1024, :1024, :]
-                    top_right = im[:1024, 1024:, :]
-                    bottom_left = im[1024:, :1024, :]
-                    bottom_right = im[1024:, 1024:, :]
-                    im = np.dstack([top_left, top_right, bottom_left, bottom_right, im1])
+                    resize_im = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
+
+                    # 创建一个空数组用于堆叠
+                    stacked_im = np.empty((h, w, 15), dtype=im.dtype)
+
+                    # 裁切图像并直接堆叠到目标数组
+                    stacked_im[:, :, :3] = im[:1024, :1024, :]  # top_left
+                    stacked_im[:, :, 3:6] = im[:1024, 1024:, :]  # top_right
+                    stacked_im[:, :, 6:9] = im[1024:, :1024, :]  # bottom_left
+                    stacked_im[:, :, 9:12] = im[1024:, 1024:, :]  # bottom_right
+                    stacked_im[:, :, 12:] = resize_im  # 原始图像
+
+                    im = stacked_im
             elif not (h0 == w0 == self.imgsz):  # resize by stretching image to square imgsz
                 im = cv2.resize(im, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
 
@@ -250,7 +257,7 @@ class BaseDataset(Dataset):
             if im is None:
                 continue
             ratio = self.imgsz / max(im.shape[0], im.shape[1])  # max(h, w)  # ratio
-            b += im.nbytes * ratio**2
+            b += im.nbytes * ratio ** 2
         mem_required = b * self.ni / n * (1 + safety_margin)  # GB required to cache dataset into RAM
         mem = psutil.virtual_memory()
         if mem_required > mem.available:
