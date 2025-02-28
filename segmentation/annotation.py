@@ -21,6 +21,8 @@ sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
 from aslide import Aslide
 
 MIN_AREA = 3000
+
+
 def is_background(img, threshold=5):
     img_array = np.array(img)
     pixel_max = np.max(img_array, axis=2)
@@ -29,6 +31,7 @@ def is_background(img, threshold=5):
     tissue_percent = np.sum(difference > threshold) / (img_array.shape[0] * img_array.shape[1])
 
     return tissue_percent < 0.05
+
 
 class Annotation:
     def __init__(self, opt):
@@ -303,14 +306,20 @@ class YOLOAnnotation(Annotation):
     def __init__(self, opt):
         super().__init__(opt)
         self.patch_level = opt.patch_level
-        self.slide_dir = opt.slide_dir if opt.slide_dir else os.path.join(opt.data_root, f'slides')
+        self.slide_dir = opt.slide_dir if opt.slide_dir else os.path.join(opt.data_root, f'test/0224')
         self.slide_list = opt.slide_list
         self.gpu_ids = opt.gpu_ids
 
         self.model = YOLO(opt.ckpt)
-        self.label_dict = {0: 'prostate', 1: 'cancer'}
-        self.color_dict = {'prostate': [255, 0, 0], 'cancer': [0, 255, 0]}
-        self.features = []
+        self.label_dict = {0: 'prostate', 1: 'cancer', 2: 'burn', 3: 'vessel', 4: 'epithelium', 5: 'ganglion'}
+        self.color_dict = {
+            'prostate': [0, 255, 0],  # 红色
+            'cancer': [255, 0, 0],  # 绿色
+            'burn': [0, 0, 255],  # 蓝色
+            'vessel': [255, 255, 0],  # 黄色
+            'epithelium': [255, 0, 255],  # 紫色
+            'ganglion': [0, 255, 255]  # 青色
+        }
 
     def inference(self, img):
         results = self.model(img, device=self.gpu_ids)
@@ -325,7 +334,8 @@ class YOLOAnnotation(Annotation):
                 labels.append(label)
         return coords, labels
 
-    def qupath_feature(self, coords, labels):
+    def qupath_feature(self, coords, labels, base):
+        features = []
         for coord, label in zip(coords, labels):
             feature = {
                 "type": "Feature",
@@ -340,43 +350,70 @@ class YOLOAnnotation(Annotation):
                 "objectType": "annotation",
                 "classification": {"name": label, "color": self.color_dict[label]}
             }})
-            self.features.append(feature)
-
-    def patch_process(self, slide):
-        base, ext = os.path.splitext(slide)
-        slide_path = os.path.join(self.slide_dir, slide)
-        wsi = Aslide(slide_path) if ext == '.kfb' else openslide.open_slide(slide_path)
-        [w, h] = wsi.level_dimensions[self.patch_level]
-        step = int(self.patch_size)
-        for w_s in range(0, w, step):
-            for h_s in range(0, h, step):
-                input_img = wsi.read_region((w_s, h_s), self.patch_level, (min(self.patch_size, w - w_s), min(self.patch_size, h - h_s)))
-                if is_background(input_img):
-                    continue
-                if isinstance(input_img, Image.Image):
-                    input_img = input_img.convert('RGB')
-                    input_img = input_img.resize((1024, 1024))
-                else:
-                    input_img = cv2.resize(input_img, (1024, 1024), interpolation=cv2.INTER_LINEAR)
-                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
-                coords, labels = self.inference(input_img)
-                new_coords = []
-                for (x1, y1, x2, y2) in coords:
-                    x1 = int(x1 * 2 + w_s)
-                    y1 = int(y1 * 2 + h_s)
-                    x2 = int(x2 * 2 + w_s)
-                    y2 = int(y2 * 2 + h_s)
-                    new_coords.append([[[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]])
-
-                self.qupath_feature(new_coords, labels)
-        geojson = {"type": "FeatureCollection", "features": self.features}
+            features.append(feature)
+        geojson = {"type": "FeatureCollection", "features": features}
         with open(os.path.join(self.output_dir, f'{base}.geojson'), 'w') as f:
             json.dump(geojson, f, indent=2)
             logger.info(f'generated {base}.geojson contour json!!!')
 
+    def patch_process(self, slide):
+        patch_level = 0
+
+        base, ext = os.path.splitext(slide)
+        slide_path = os.path.join(self.slide_dir, slide)
+        wsi = Aslide(slide_path) if ext == '.kfb' else openslide.open_slide(slide_path)
+        if wsi.mpp == 40:
+            patch_level = 1
+        elif wsi.mpp == 80:
+            patch_level = 2
+        [w, h] = wsi.level_dimensions[patch_level]
+
+        step = int(self.patch_size)
+        t_coords, t_labels = [], []
+        for w_s in range(0, w - step, step):
+            for h_s in range(0, h - step, step):
+                input_img = wsi.read_region((w_s, h_s), patch_level, (self.patch_size, self.patch_size))
+                if is_background(input_img):
+                    continue
+                if isinstance(input_img, Image.Image):
+                    input_img = input_img.convert('RGB')
+                    input_img = input_img.resize((1536, 1536))
+                else:
+                    input_img = cv2.resize(input_img, (1536, 1536), interpolation=cv2.INTER_LINEAR)
+                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
+                coords, labels = self.inference(input_img)
+                new_coords = []
+                for (x1, y1, x2, y2) in coords:
+                    x1 = int(x1 * 1.33333 + w_s) * wsi.level_downsamples[patch_level]
+                    y1 = int(y1 * 1.33333 + h_s) * wsi.level_downsamples[patch_level]
+                    x2 = int(x2 * 1.33333 + w_s) * wsi.level_downsamples[patch_level]
+                    y2 = int(y2 * 1.33333 + h_s) * wsi.level_downsamples[patch_level]
+                    new_coords.append([[[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]])
+                t_coords += new_coords
+                t_labels += labels
+
+        self.qupath_feature(t_coords, t_labels, base)
+
+    @property
+    def slides(self):
+        if self.slide_list:
+            slides = self.slide_list
+        else:
+            slides = [f for f in os.listdir(self.slide_dir) if os.path.isfile(os.path.join(self.slide_dir, f))]
+        return slides
+
     def run_(self):
-        for slide in self.slide_list:
+        for slide in self.slides:
             self.patch_process(slide)
+
+    def parallel_run(self):
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(self.patch_process, slide) for slide in self.slides]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    traceback.print_exc()
 
 
 parser = argparse.ArgumentParser()
@@ -392,12 +429,7 @@ parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=1024, help='output size')
 parser.add_argument('--skip_done', action='store_true', help='skip done')
-# parser.add_argument('--slide_list', type=list, default=['1903106.4.svs', '164701.16.svs', '1638897.11.svs', '1638897.9.svs', '1547583.10.svs', '1740359.6.svs', '1547583.13.svs','1858614.3.svs']])
-# parser.add_argument('--slide_list', type=list, default=['1638897.12.svs', '1636600.10.svs', '1547583.18.svs'])
 parser.add_argument('--slide_list', type=list, default=['202303007A2.kfb'])
-# parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
-    # GeoAnnotation(args).parallel_run()
-    # LMAnnotation(args).parallel_run()
     YOLOAnnotation(args).run_()
