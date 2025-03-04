@@ -34,7 +34,7 @@ class BaseTensor(SimpleClass):
         to: Return a copy of the tensor with the specified device and dtype.
 
     Examples:
-        >>> import torch+
+        >>> import torch
         >>> data = torch.tensor([[1, 2, 3], [4, 5, 6]])
         >>> orig_shape = (720, 1280)
         >>> base_tensor = BaseTensor(data, orig_shape)
@@ -228,7 +228,7 @@ class Results(SimpleClass):
     """
 
     def __init__(
-        self, orig_img, path, names, boxes=None, masks=None, probs=None, keypoints=None, obb=None, speed=None
+            self, orig_img, path, names, boxes=None, masks=None, probs=None, keypoints=None, obb=None, speed=None
     ) -> None:
         """
         Initialize the Results class for storing and manipulating inference results.
@@ -444,24 +444,24 @@ class Results(SimpleClass):
         return Results(orig_img=self.orig_img, path=self.path, names=self.names, speed=self.speed)
 
     def plot(
-        self,
-        conf=True,
-        line_width=None,
-        font_size=None,
-        font="Arial.ttf",
-        pil=False,
-        img=None,
-        im_gpu=None,
-        kpt_radius=5,
-        kpt_line=True,
-        labels=True,
-        boxes=True,
-        masks=True,
-        probs=True,
-        show=False,
-        save=False,
-        filename=None,
-        color_mode="class",
+            self,
+            conf=True,
+            line_width=None,
+            font_size=None,
+            font="Arial.ttf",
+            pil=False,
+            img=None,
+            im_gpu=None,
+            kpt_radius=5,
+            kpt_line=True,
+            labels=True,
+            boxes=True,
+            masks=True,
+            probs=True,
+            show=False,
+            save=False,
+            filename=None,
+            color_mode="class",
     ):
         """
         Plots detection results on an input RGB image.
@@ -517,11 +517,11 @@ class Results(SimpleClass):
             if im_gpu is None:
                 img = LetterBox(pred_masks.shape[1:])(image=annotator.result())
                 im_gpu = (
-                    torch.as_tensor(img, dtype=torch.float16, device=pred_masks.data.device)
-                    .permute(2, 0, 1)
-                    .flip(0)
-                    .contiguous()
-                    / 255
+                        torch.as_tensor(img, dtype=torch.float16, device=pred_masks.data.device)
+                        .permute(2, 0, 1)
+                        .flip(0)
+                        .contiguous()
+                        / 255
                 )
             idx = (
                 pred_boxes.id
@@ -534,23 +534,7 @@ class Results(SimpleClass):
 
         # Plot Detect results
         if pred_boxes is not None and show_boxes:
-            # indexes = []
-            # for i, d1 in enumerate(reversed(pred_boxes)):
-            #     for j, d2 in enumerate(reversed(pred_boxes)):
-            #         if j <= i:
-            #             continue
-            #         x, y, w, h = d1.xywh[0]
-            #         x1, y1, x2, y2 = x - w / 2, y - h / 2, x + w / 2, y + h / 2
-            #         x, y, w, h = d2.xywh[0]
-            #         x3, y3, x4, y4 = x - w / 2, y - h / 2, x + w / 2, y + h / 2
-            #         if x1 * 0.95 <= x3 and y1 * 0.95 <= y3 and x2 * 1.05 >= x4 and y2 * 1.05 >= y4 and d1.cls == d2.cls:
-            #             indexes.append(j)
-            #         elif x1 >= x3 * 0.95 and y1 >= y3 * 0.95 and x2 <= x4 * 1.05 and y2 <= y4 * 1.05 and d1.cls == d2.cls:
-            #             indexes.append(i)
-
             for i, d in enumerate(reversed(pred_boxes)):
-                # if i in indexes:
-                #     continue
                 c, d_conf, id = int(d.cls), float(d.conf) if conf else None, None if d.id is None else int(d.id.item())
                 name = ("" if id is None else f"id:{id} ") + names[c]
                 label = (f"{name} {d_conf:.2f}" if conf else name) if labels else None

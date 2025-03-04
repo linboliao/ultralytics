@@ -28,9 +28,7 @@ def is_background(img, threshold=5):
     pixel_max = np.max(img_array, axis=2)
     pixel_min = np.min(img_array, axis=2)
     difference = pixel_max - pixel_min
-    tissue_percent = np.sum(difference > threshold) / (img_array.shape[0] * img_array.shape[1])
-
-    return tissue_percent < 0.05
+    return np.sum(difference > threshold) < 500000
 
 
 class Annotation:
@@ -327,11 +325,19 @@ class YOLOAnnotation(Annotation):
         labels = []
         for result in results:
             boxes = result.boxes
+            cancer_area = 0
+            remove_list = []
             for i, box in enumerate(reversed(boxes)):
                 [x1, y1, x2, y2] = box.xyxy.tolist()[0]
                 label = self.label_dict[int(box.cls.tolist()[0])]
+                if label == "cancer":
+                    cancer_area += (x2 - x1) * (y2 - y1)
+                    remove_list.append(i)
                 coords.append([x1, y1, x2, y2])
                 labels.append(label)
+            if cancer_area < 1536 ** 2 * 0.1:
+                coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
+                labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
         return coords, labels
 
     def qupath_feature(self, coords, labels, base):
@@ -417,19 +423,19 @@ class YOLOAnnotation(Annotation):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--ckpt', type=str, default='/NAS2/Data1/lbliao/Code/ultralytics/runs/detect/train3/weights/last.pt')
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Repeat/2024-12-10/', help='patch directory')
+parser.add_argument('--ckpt', type=str, default='/data2/lbliao/Code/ultralytics/runs/detect/2048-1536-2/weights/best.pt')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
-parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
+parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/test/0224', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Repeat/result/', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2//Data1/lbliao/Data/MXB/Seg-Relabel/result/0224-filter/', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=1024, help='output size')
 parser.add_argument('--skip_done', action='store_true', help='skip done')
-parser.add_argument('--slide_list', type=list, default=['202303007A2.kfb'])
+parser.add_argument('--slide_list', type=list, default=['202468220.15.kfb','202467227.7.kfb', '202467227.8.kfb','202467810.39.kfb', '202467810.45.46.kfb', '202467810.51.kfb'])
 if __name__ == '__main__':
     args = parser.parse_args()
     YOLOAnnotation(args).run_()
