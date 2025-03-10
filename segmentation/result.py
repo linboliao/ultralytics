@@ -106,15 +106,16 @@ class GeoResults(Result):
         if ext == '.kfb':
             wsi = Aslide(slide_path)
             width, height = wsi.level_dimensions[0]
+            mpp = wsi.mpp
         elif ext == '.tif':
             wsi = Image.open(slide_path)
             width, height = wsi.size[0], wsi.size[1]
-            wsi.mpp = 20
+            mpp = 20
         else:
             wsi = openslide.OpenSlide(slide_path)
             width, height = wsi.level_dimensions[0]
-        times = self.patch_size / self.infer_size
-        step = int(self.patch_size * (wsi.mpp / 20))
+            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
+        step = int(self.patch_size * (mpp / 20))
 
         t_coords, t_labels = [], []
         for w_s in range(0, width - step, step):
@@ -195,13 +196,15 @@ class TiffResults(Result):
         if ext == '.kfb':
             wsi = Aslide(slide_path)
             width, height = wsi.level_dimensions[0]
+            mpp = wsi.mpp
         elif ext == '.tif':
             wsi = Image.open(slide_path)
             width, height = wsi.size[0], wsi.size[1]
-            wsi.mpp = 20
+            mpp = 20
         else:
             wsi = openslide.OpenSlide(slide_path)
             width, height = wsi.level_dimensions[0]
+            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
         step = int(self.patch_size * wsi.mpp / 20)
         times = step // self.patch_size
         canvas = np.zeros([height, width, 3], dtype=np.uint8)
@@ -267,15 +270,16 @@ class MdsResults(Result):
         if ext == '.kfb':
             wsi = Aslide(slide_path)
             width, height = wsi.level_dimensions[0]
+            mpp = wsi.mpp
         elif ext == '.tif':
             wsi = Image.open(slide_path)
             width, height = wsi.size[0], wsi.size[1]
-            wsi.mpp = 20
+            mpp = 20
         else:
             wsi = openslide.OpenSlide(slide_path)
             width, height = wsi.level_dimensions[0]
-        times = self.patch_size / self.infer_size
-        step = int(self.patch_size * (wsi.mpp / 20))
+            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
+        step = int(self.patch_size * (mpp / 20))
 
         t_coords, t_labels = [], []
         for w_s in range(0, width - step, step):

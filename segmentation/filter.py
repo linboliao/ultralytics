@@ -135,22 +135,24 @@ def size_filter1():
 
 # 指定你的文件夹路径
 def split_data():
-    he_dir = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/data3/images'
-    ann_path = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/data3/labels/'
+    he_dir = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/2048-1/images'
+    ann_path = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/2048-1/labels'
 
-    img_dir = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/data5/'
+    img_dir = r'/NAS2/Data1/lbliao/Data/MXB/0307/dataset/2048'
     os.makedirs(img_dir, exist_ok=True)
 
     he_imgs = os.listdir(he_dir)
     random.shuffle(he_imgs)
     length = len(he_imgs)
-    train = int(length * 0.9)
+    train = int(length * 0.7)
     for i in range(train):
         base, ext = os.path.splitext(he_imgs[i])
         img = os.path.join(img_dir, 'train/images')
         label = os.path.join(img_dir, 'train/labels')
         os.makedirs(img, exist_ok=True)
         os.makedirs(label, exist_ok=True)
+        if os.path.exists(os.path.join(img, he_imgs[i])):
+            continue
         shutil.copy(os.path.join(he_dir, he_imgs[i]), os.path.join(img, he_imgs[i]))
         shutil.copy(os.path.join(ann_path, f'{base}.txt'), os.path.join(label, f'{base}.txt'))
 

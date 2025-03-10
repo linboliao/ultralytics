@@ -134,7 +134,7 @@ class GeoAnnotation(Annotation):
         super().__init__(opt)
         self.coord_dir = opt.coord_dir if opt.coord_dir else os.path.join(opt.data_root, f'patch/{opt.patch_size}/coord')
         self.slide_dir = opt.slide_dir if opt.slide_dir else os.path.join(opt.data_root, f'slides')
-        self.geo_ann_dir = opt.geo_ann_dir if opt.geo_ann_dir else os.path.join(opt.data_root, f'annotation')
+        self.geo_ann_dir = opt.geo_ann_dir if opt.geo_ann_dir else os.path.join(opt.data_root, f'geojson')
         self.slide_list = opt.slide_list
 
         self.label_dir = os.path.join(self.output_dir, f'labels/')
@@ -180,10 +180,10 @@ class GeoAnnotation(Annotation):
             patch_coords = []
             label_path = os.path.join(self.label_dir, f'{base}_{w}_{h}.txt')
 
-            def contour(data):
+            def contour(data, _w, _h):
                 lc_coords = []
-                if any(w < a < w + self.patch_size and h < b < h + self.patch_size for (a, b) in data) and len(data) > 10:
-                    data = [[a - w, b - h] for [a, b] in data]
+                if any(_w < a < _w + self.patch_size and _h < b < _h + self.patch_size for (a, b) in data):
+                    data = [[a - _w, b - _h] for [a, b] in data]
                     patch_coords.append(data)
                     data = np.array(data)
                     contours = np.squeeze(data.reshape(-1, 1))
@@ -218,12 +218,12 @@ class GeoAnnotation(Annotation):
                     if feature['geometry']['type'] == 'Polygon':
                         for coords in coordinates:
                             if isinstance(coords, list):
-                                contour(coords)
+                                contour(coords, w, h)
                     elif feature['geometry']['type'] == 'MultiPolygon':
                         for coords in coordinates:
                             for sub_coords in coords:
                                 if isinstance(sub_coords, list):
-                                    contour(sub_coords)
+                                    contour(sub_coords, w, h)
             patch = wsi.read_region((w, h), 0, (self.patch_size, self.patch_size))
             if isinstance(patch, np.ndarray):
                 patch = Image.fromarray(patch)
@@ -427,7 +427,7 @@ parser.add_argument('--ckpt', type=str, default='/data2/lbliao/Code/ultralytics/
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
-parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/test/0224', help='patch directory')
+parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
 parser.add_argument('--output_dir', type=str, default='/NAS2//Data1/lbliao/Data/MXB/Seg-Relabel/result/0224-filter/', help='output directory')
@@ -435,7 +435,8 @@ parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=1024, help='output size')
 parser.add_argument('--skip_done', action='store_true', help='skip done')
-parser.add_argument('--slide_list', type=list, default=['202468220.15.kfb','202467227.7.kfb', '202467227.8.kfb','202467810.39.kfb', '202467810.45.46.kfb', '202467810.51.kfb'])
+parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
-    YOLOAnnotation(args).run_()
+    # YOLOAnnotation(args).run_()
+    GeoAnnotation(args).parallel_run()
