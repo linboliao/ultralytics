@@ -22,7 +22,10 @@ __all__ = (
     "Concat",
     "RepConv",
     "Index",
+    "PConv",
 )
+
+from torchvision.ops import deform_conv2d
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
@@ -75,7 +78,7 @@ class Conv2(Conv):
         """Fuse parallel convolutions."""
         w = torch.zeros_like(self.conv.weight.data)
         i = [x // 2 for x in w.shape[2:]]
-        w[:, :, i[0] : i[0] + 1, i[1] : i[1] + 1] = self.cv2.weight.data.clone()
+        w[:, :, i[0]: i[0] + 1, i[1]: i[1] + 1] = self.cv2.weight.data.clone()
         self.conv.weight.data += w
         self.__delattr__("cv2")
         self.forward = self.forward_fuse
@@ -348,3 +351,60 @@ class Index(nn.Module):
         Expects a list of tensors as input.
         """
         return x[self.index]
+
+
+class PConv(nn.Module):
+    ''' Pinwheel-shaped Convolution using the Asymmetric Padding method. '''
+
+    def __init__(self, c1, c2, k, s):
+        super().__init__()
+
+        # self.k = k
+        p = [(k, 0, 1, 0), (0, k, 0, 1), (0, 1, k, 0), (1, 0, 0, k)]
+        self.pad = [nn.ZeroPad2d(padding=(p[g])) for g in range(4)]
+        self.cw = Conv(c1, c2 // 4, (1, k), s=s, p=0)
+        self.ch = Conv(c1, c2 // 4, (k, 1), s=s, p=0)
+        self.cat = Conv(c2, c2, 2, s=1, p=0)
+
+    def forward(self, x):
+        yw0 = self.cw(self.pad[0](x))
+        yw1 = self.cw(self.pad[1](x))
+        yh0 = self.ch(self.pad[2](x))
+        yh1 = self.ch(self.pad[3](x))
+        return self.cat(torch.cat([yw0, yw1, yh0, yh1], dim=1))
+
+
+class DynamicSnakeConv(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3):
+        super().__init__()
+        self.offset_conv = nn.Conv2d(in_channels, 2 * kernel_size * kernel_size, kernel_size=3, padding=1)
+        self.main_conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        # 生成偏移量 [batch, 2*K*K, H, W]
+        offsets = self.offset_conv(x)
+        # 应用可变形卷积
+        return deform_conv2d(x, offsets, self.main_conv.weight, self.main_conv.bias)
+
+
+class C3k2_DynamicSnake(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        # 分支1：动态蛇形卷积 + 标准卷积
+        self.branch1 = nn.Sequential(
+            DynamicSnakeConv(in_channels, out_channels // 2, kernel_size=3),
+            nn.Conv2d(out_channels // 2, out_channels // 2, kernel_size=1)
+        )
+        # 分支2：标准卷积
+        self.branch2 = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels // 2, kernel_size=1),
+            nn.Conv2d(out_channels // 2, out_channels // 2, kernel_size=3, padding=1)
+        )
+        # 特征融合
+        self.fusion = nn.Conv2d(out_channels, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        branch1_out = self.branch1(x)
+        branch2_out = self.branch2(x)
+        concat = torch.cat([branch1_out, branch2_out], dim=1)
+        return self.fusion(concat)
