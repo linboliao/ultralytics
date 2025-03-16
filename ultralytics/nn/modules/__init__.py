@@ -75,6 +75,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
     PConv,
+    DySnakeConv,
 )
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (

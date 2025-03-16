@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import sys
 import traceback
 import uuid
@@ -363,5 +364,65 @@ class LMResults(Result):
     def __init__(self, opt):
         super().__init__(opt)
 
-    def process(self, img):
-        pass
+    def process(self, slide):
+        base, ext = os.path.splitext(slide)
+        slide_path = os.path.join(self.slide_dir, slide)
+        if ext == '.kfb':
+            wsi = Aslide(slide_path)
+            width, height = wsi.level_dimensions[0]
+            mpp = wsi.mpp
+        elif ext == '.tif':
+            wsi = Image.open(slide_path)
+            width, height = wsi.size[0], wsi.size[1]
+            mpp = 20
+        else:
+            wsi = openslide.OpenSlide(slide_path)
+            width, height = wsi.level_dimensions[0]
+            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
+        step = int(self.patch_size * (mpp / 20))
+
+        os.makedirs(self.output_dir, exist_ok=True)
+        for w_s in range(0, width - step, step):
+            for h_s in range(0, height - step, step):
+                if ext == '.tif':
+                    input_img = wsi.crop((w_s, h_s, w_s + step, h_s + step))
+                else:
+                    input_img = wsi.read_region((w_s, h_s), 0, (step, step))
+                if is_background(input_img):
+                    continue
+                if isinstance(input_img, Image.Image):
+                    input_img = input_img.convert('RGB')
+                    numpy_array = np.array(input_img)
+                    input_img = cv2.cvtColor(numpy_array, cv2.COLOR_RGB2BGR)
+                else:
+                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
+                base, ext = os.path.splitext(slide)
+                cv2.imwrite(os.path.join(self.output_dir, f'{base}_{w_s}_{h_s}.jpg'), input_img)
+                results = self.model(input_img, device=self.gpu)
+                shapes = []
+                for result in results:
+                    boxes = result.boxes  # Boxes object for bounding box outputs
+                    for i, box in enumerate(reversed(boxes)):
+                        [x1, y1, x2, y2] = box.xyxy.tolist()[0]
+                        points = [[x1, y1], [x2, y2]]
+                        shapes.append({
+                            "label": self.label_dict[int(box.cls.tolist()[0])],
+                            "points": points,
+                            "group_id": None,
+                            "description": "",
+                            "shape_type": "rectangle",
+                            "flags": {},
+                            "mask": None
+                        })
+                ann = {
+                    "version": "5.6.0",
+                    "flags": {},
+                    "shapes": shapes,
+                    "imagePath": f"{base}_{w_s}_{h_s}.jpg",
+                    "imageData": None,
+                    "imageHeight": step,
+                    "imageWidth": step,
+                }
+                with open(os.path.join(self.output_dir, f'{base}_{w_s}_{h_s}.json'), 'w') as f:
+                    json.dump(ann, f, indent=2)
+                logger.info(f'process {base}_{w_s}_{h_s}.jpg')

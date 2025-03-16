@@ -250,4 +250,4 @@ if __name__ == '__main__':
         model = yolov8_heatmap(**each)
         # model第一个参数：单张图片路径或者图片文件夹路径; 第二个参数：保存路径; 第三个参数：绘制热力图方法
         # model(r'images/00052.jpg', 'result', each['method'])
-        model(r'/NAS2/Data1/lbliao/Data/MXB/0307/dataset/2048/val/images/1638897.11_21504_1536.png', 'result', each['method'])
+        model(r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/2048-1/images/164701.16_3072_12288.jpg', 'result', each['method'])

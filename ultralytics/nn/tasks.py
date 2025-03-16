@@ -64,7 +64,8 @@ from ultralytics.nn.modules import (
     WorldDetect,
     v10Detect,
     CBAM,
-    PConv
+    PConv,
+    DySnakeConv
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -990,7 +991,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             SCDown,
             C2fCIB,
             A2C2f,
-            PConv
+            PConv,
+            DySnakeConv,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
