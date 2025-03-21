@@ -165,75 +165,93 @@ class GeoAnnotation(Annotation):
 
     def get_contours(self, slide):
         wsi_path = os.path.join(self.slide_dir, slide)
-        wsi = Aslide(wsi_path) if '.kfb' in slide else openslide.OpenSlide(wsi_path)
         base, ext = os.path.splitext(slide)
-        file = h5py.File(os.path.join(self.coord_dir, f'{base}.h5'), mode='r')
-        he_points = list(file['coords'][:])
         logger.info(f'start to process {slide}')
-        for (w, h) in he_points:
-            ann_path = os.path.join(self.geo_ann_dir, f'{base}.geojson')
-            if self.skip_done and os.path.isfile(os.path.join(self.image_dir, f'{base}_{w}_{h}.png')):
-                continue
-            with open(ann_path, 'r', encoding='utf-8') as file:
-                anns = json.load(file)
-            features = anns.get('features')
-            patch_coords = []
-            label_path = os.path.join(self.label_dir, f'{base}_{w}_{h}.txt')
 
-            def contour(data, _w, _h):
-                lc_coords = []
-                if any(_w < a < _w + self.patch_size and _h < b < _h + self.patch_size for (a, b) in data):
-                    data = [[a - _w, b - _h] for [a, b] in data]
-                    patch_coords.append(data)
-                    data = np.array(data)
-                    contours = np.squeeze(data.reshape(-1, 1))
-                    contours = contours / self.patch_size
-                    flag = True
-                    for i in range(0, len(contours), 2):
-                        if 0 < float(contours[i]) < 1 and 0 < float(contours[i + 1]) < 1:
-                            lc_coords.append(float(contours[i]))
-                            lc_coords.append(float(contours[i + 1]))
-                        elif flag:
-                            lc_coords.append(min(max(0, float(contours[i])), 1))
-                            lc_coords.append(min(max(0, float(contours[i + 1])), 1))
-                            flag = False
-                    if len(lc_coords) >= 6 and len(lc_coords) % 2 == 0:
-                        contours_str = ' '.join(map(str, lc_coords))
-                        name = feature.get('properties', {}).get('classification', {}).get('name', '')
-                        color = feature.get('properties', {}).get('classification', {}).get('color', [])
-                        if name == 'non-cancer' or name == 'Negative':
-                            clazz = 0
-                        elif name == 'Other':
-                            return
-                        elif color == [0, 255, 0]:
-                            clazz = 0
-                        else:
-                            clazz = 1
-                        line = f'{clazz} {contours_str}'
-                        f.write(line + '\n')
+        if ext == '.kfb':
+            wsi = Aslide(wsi_path)
+            width, height = wsi.level_dimensions[0]
+            mpp = wsi.mpp
+        elif ext == '.tif':
+            wsi = Image.open(wsi_path)
+            width, height = wsi.size[0], wsi.size[1]
+            mpp = 20
+        else:
+            wsi = openslide.OpenSlide(wsi_path)
+            width, height = wsi.level_dimensions[0]
+            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
+        ann_path = os.path.join(self.geo_ann_dir, f'{base}.geojson')
+        with open(ann_path, 'r', encoding='utf-8') as file:
+            anns = json.load(file)
+        features = anns.get('features')
+        step = int(self.patch_size * (mpp / 20))
+        for w in range(0, width - step, step):
+            for h in range(0, height - step, step):
+                input_img = wsi.read_region((w, h), 0, (step, step))
+                if is_background(input_img):
+                    continue
 
-            with open(label_path, 'w') as f:
-                for feature in features:
-                    coordinates = feature['geometry']['coordinates']
-                    if feature['geometry']['type'] == 'Polygon':
-                        for coords in coordinates:
-                            if isinstance(coords, list):
-                                contour(coords, w, h)
-                    elif feature['geometry']['type'] == 'MultiPolygon':
-                        for coords in coordinates:
-                            for sub_coords in coords:
-                                if isinstance(sub_coords, list):
-                                    contour(sub_coords, w, h)
-            patch = wsi.read_region((w, h), 0, (self.patch_size, self.patch_size))
-            if isinstance(patch, np.ndarray):
-                patch = Image.fromarray(patch)
-            patch.save(os.path.join(self.contour_dir, f'{base}_{w}_{h}.png'))
-            self.show_contours(f'{base}_{w}_{h}.png', patch_coords)
-            patch = patch.resize((self.output_size, self.output_size))
-            image_path = os.path.join(self.image_dir, f'{base}_{w}_{h}.png')
-            patch.save(image_path, quality=95)
+                if self.skip_done and os.path.isfile(os.path.join(self.image_dir, f'{base}_{w}_{h}.png')):
+                    continue
+                patch_coords = []
+                label_path = os.path.join(self.label_dir, f'{base}_{w}_{h}.txt')
 
-            logger.info(f'{base}_{w}_{h}.png Annotation generated')
+                def contour(data, _w, _h):
+                    lc_coords = []
+                    if any(_w < a < _w + self.patch_size and _h < b < _h + self.patch_size for (a, b) in data):
+                        data = [[a - _w, b - _h] for [a, b] in data]
+                        patch_coords.append(data)
+                        data = np.array(data)
+                        contours = np.squeeze(data.reshape(-1, 1))
+                        contours = contours / self.patch_size
+                        flag = True
+                        for i in range(0, len(contours), 2):
+                            if 0 < float(contours[i]) < 1 and 0 < float(contours[i + 1]) < 1:
+                                lc_coords.append(float(contours[i]))
+                                lc_coords.append(float(contours[i + 1]))
+                            elif flag:
+                                lc_coords.append(min(max(0, float(contours[i])), 1))
+                                lc_coords.append(min(max(0, float(contours[i + 1])), 1))
+                                flag = False
+                        if len(lc_coords) >= 6 and len(lc_coords) % 2 == 0:
+                            contours_str = ' '.join(map(str, lc_coords))
+                            name = feature.get('properties', {}).get('classification', {}).get('name', '')
+                            color = feature.get('properties', {}).get('classification', {}).get('color', [])
+                            if name == 'non-cancer' or name == 'Negative':
+                                clazz = 0
+                            elif name == 'Other':
+                                return
+                            elif name == 'Necrosis':
+                                clazz = 2
+                            elif color == [0, 255, 0]:
+                                clazz = 0
+                            else:
+                                clazz = 1
+                            line = f'{clazz} {contours_str}'
+                            f.write(line + '\n')
+
+                with open(label_path, 'w') as f:
+                    for feature in features:
+                        coordinates = feature['geometry']['coordinates']
+                        if feature['geometry']['type'] == 'Polygon':
+                            for coords in coordinates:
+                                if isinstance(coords, list):
+                                    contour(coords, w, h)
+                        elif feature['geometry']['type'] == 'MultiPolygon':
+                            for coords in coordinates:
+                                for sub_coords in coords:
+                                    if isinstance(sub_coords, list):
+                                        contour(sub_coords, w, h)
+                patch = wsi.read_region((w, h), 0, (self.patch_size, self.patch_size))
+                if isinstance(patch, np.ndarray):
+                    patch = Image.fromarray(patch)
+                patch.save(os.path.join(self.contour_dir, f'{base}_{w}_{h}.png'))
+                self.show_contours(f'{base}_{w}_{h}.png', patch_coords)
+                patch = patch.resize((self.output_size, self.output_size))
+                image_path = os.path.join(self.image_dir, f'{base}_{w}_{h}.png')
+                patch.save(image_path, quality=95)
+
+                logger.info(f'{base}_{w}_{h}.png Annotation generated')
 
     def run(self, slide: str):
         self.get_contours(slide)
@@ -300,140 +318,19 @@ class LMAnnotation(Annotation):
                     traceback.print_exc()
 
 
-class YOLOAnnotation(Annotation):
-    def __init__(self, opt):
-        super().__init__(opt)
-        self.patch_level = opt.patch_level
-        self.slide_dir = opt.slide_dir if opt.slide_dir else os.path.join(opt.data_root, f'test/0224')
-        self.slide_list = opt.slide_list
-        self.gpu_ids = opt.gpu_ids
-
-        self.model = YOLO(opt.ckpt)
-        self.label_dict = {0: 'prostate', 1: 'cancer', 2: 'burn', 3: 'vessel', 4: 'epithelium', 5: 'ganglion'}
-        self.color_dict = {
-            'prostate': [0, 255, 0],  # 红色
-            'cancer': [255, 0, 0],  # 绿色
-            'burn': [0, 0, 255],  # 蓝色
-            'vessel': [255, 255, 0],  # 黄色
-            'epithelium': [255, 0, 255],  # 紫色
-            'ganglion': [0, 255, 255]  # 青色
-        }
-
-    def inference(self, img):
-        results = self.model(img, device=self.gpu_ids)
-        coords = []
-        labels = []
-        for result in results:
-            boxes = result.boxes
-            cancer_area = 0
-            remove_list = []
-            for i, box in enumerate(reversed(boxes)):
-                [x1, y1, x2, y2] = box.xyxy.tolist()[0]
-                label = self.label_dict[int(box.cls.tolist()[0])]
-                if label == "cancer":
-                    cancer_area += (x2 - x1) * (y2 - y1)
-                    remove_list.append(i)
-                coords.append([x1, y1, x2, y2])
-                labels.append(label)
-            if cancer_area < 1536 ** 2 * 0.1:
-                coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
-                labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
-        return coords, labels
-
-    def qupath_feature(self, coords, labels, base):
-        features = []
-        for coord, label in zip(coords, labels):
-            feature = {
-                "type": "Feature",
-                "id": str(uuid.uuid4()),
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": coord,
-                }
-            }
-
-            feature.update({"properties": {
-                "objectType": "annotation",
-                "classification": {"name": label, "color": self.color_dict[label]}
-            }})
-            features.append(feature)
-        geojson = {"type": "FeatureCollection", "features": features}
-        with open(os.path.join(self.output_dir, f'{base}.geojson'), 'w') as f:
-            json.dump(geojson, f, indent=2)
-            logger.info(f'generated {base}.geojson contour json!!!')
-
-    def patch_process(self, slide):
-        patch_level = 0
-
-        base, ext = os.path.splitext(slide)
-        slide_path = os.path.join(self.slide_dir, slide)
-        wsi = Aslide(slide_path) if ext == '.kfb' else openslide.open_slide(slide_path)
-        if wsi.mpp == 40:
-            patch_level = 1
-        elif wsi.mpp == 80:
-            patch_level = 2
-        [w, h] = wsi.level_dimensions[patch_level]
-
-        step = int(self.patch_size)
-        t_coords, t_labels = [], []
-        for w_s in range(0, w - step, step):
-            for h_s in range(0, h - step, step):
-                input_img = wsi.read_region((w_s, h_s), patch_level, (self.patch_size, self.patch_size))
-                if is_background(input_img):
-                    continue
-                if isinstance(input_img, Image.Image):
-                    input_img = input_img.convert('RGB')
-                    input_img = input_img.resize((1536, 1536))
-                else:
-                    input_img = cv2.resize(input_img, (1536, 1536), interpolation=cv2.INTER_LINEAR)
-                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
-                coords, labels = self.inference(input_img)
-                new_coords = []
-                for (x1, y1, x2, y2) in coords:
-                    x1 = int(x1 * 1.33333 + w_s) * wsi.level_downsamples[patch_level]
-                    y1 = int(y1 * 1.33333 + h_s) * wsi.level_downsamples[patch_level]
-                    x2 = int(x2 * 1.33333 + w_s) * wsi.level_downsamples[patch_level]
-                    y2 = int(y2 * 1.33333 + h_s) * wsi.level_downsamples[patch_level]
-                    new_coords.append([[[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]])
-                t_coords += new_coords
-                t_labels += labels
-
-        self.qupath_feature(t_coords, t_labels, base)
-
-    @property
-    def slides(self):
-        if self.slide_list:
-            slides = self.slide_list
-        else:
-            slides = [f for f in os.listdir(self.slide_dir) if os.path.isfile(os.path.join(self.slide_dir, f))]
-        return slides
-
-    def run_(self):
-        for slide in self.slides:
-            self.patch_process(slide)
-
-    def parallel_run(self):
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(self.patch_process, slide) for slide in self.slides]
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception:
-                    traceback.print_exc()
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--ckpt', type=str, default='/data2/lbliao/Code/ultralytics/runs/detect/2048-1536-2/weights/best.pt')
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/0224', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2//Data1/lbliao/Data/MXB/Seg-Relabel/result/0224-filter/', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/0224/dataset', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
-parser.add_argument('--output_size', type=int, default=1024, help='output size')
+parser.add_argument('--output_size', type=int, default=2048, help='output size')
 parser.add_argument('--skip_done', action='store_true', help='skip done')
 parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':

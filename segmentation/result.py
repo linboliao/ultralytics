@@ -81,7 +81,7 @@ class GeoResults(Result):
 
     def infer(self, img, gpu):
         # img : str or path or PIL.Image or np.ndarray：BGR
-        results = self.model(img, device=gpu)
+        results = self.model(img, device=gpu, agnostic_nms=True, iou=0.4)
         coords = []
         labels = []
         for result in results:
