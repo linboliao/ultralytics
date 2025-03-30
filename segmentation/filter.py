@@ -135,10 +135,10 @@ def size_filter1():
 
 # 指定你的文件夹路径
 def split_data():
-    he_dir = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/2048/images'
-    ann_path = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/2048/labels'
+    he_dir = r'/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+/dataset/images'
+    ann_path = r'/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+/dataset/labels'
 
-    img_dir = r'/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/2048'
+    img_dir = r'/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+/dataset/2048'
     os.makedirs(img_dir, exist_ok=True)
 
     he_imgs = os.listdir(he_dir)

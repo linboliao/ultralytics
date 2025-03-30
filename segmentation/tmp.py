@@ -55,3 +55,5 @@ geojson = {
 with open(os.path.join('/NAS2/Data1/lbliao/Data/MXB/123/', f'result.geojson'), 'w') as f:
     json.dump(geojson, f, indent=2)
     print(f'generated result.geojson contour json!!!')
+
+

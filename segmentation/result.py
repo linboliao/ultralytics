@@ -27,7 +27,7 @@ def is_background(img, threshold=5):
     pixel_max = np.max(img_array, axis=2)
     pixel_min = np.min(img_array, axis=2)
     difference = pixel_max - pixel_min
-    return np.sum(difference > threshold) < 800000
+    return np.sum(difference > threshold) < 10000
 
 
 class Result:
@@ -43,7 +43,7 @@ class Result:
         self.output_dir = opt.output_dir if opt.output_dir else os.path.join(opt.data_root, f'results/')
         os.makedirs(os.path.dirname(self.output_dir), exist_ok=True)
 
-        self.label_dict = {0: 'prostate', 1: 'cancer', 2: 'burn', 3: 'vessel', 4: 'epithelium', 5: 'ganglion'}
+        self.label_dict = {0: 'prostate', 1: 'cancer', 2: 'vessel', 4: 'epithelium', 3: 'ganglion'}
         self.color_dict = {'prostate': [0, 255, 0], 'cancer': [255, 0, 0], 'burn': [0, 0, 255], 'vessel': [255, 255, 0], 'epithelium': [255, 0, 255], 'ganglion': [0, 255, 255]}
 
     def infer(self, img, gpu):
@@ -66,7 +66,7 @@ class Result:
             self.process(slide)
 
     def parallel_run(self):
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             futures = [executor.submit(self.process, slide) for slide in self.slides]
             for future in as_completed(futures):
                 try:
@@ -185,7 +185,7 @@ class TiffResults(Result):
 
     def infer(self, img, gpu):
         # img : str or path or PIL.Image or np.ndarray：BGR
-        results = self.model(img, device=gpu)
+        results = self.model(img, device=gpu, agnostic_nms=True, iou=0.4)
         if isinstance(results[0], Results):
             return results[0].plot()
         else:
@@ -245,7 +245,7 @@ class MdsResults(Result):
 
     def infer(self, img, gpu):
         # img : str or path or PIL.Image or np.ndarray：BGR
-        results = self.model(img, device=gpu)
+        results = self.model(img, device=gpu, agnostic_nms=True, iou=0.4)
         coords = []
         labels = []
         for result in results:
@@ -348,7 +348,7 @@ class MdsResults(Result):
                 "Path": ""
             })
 
-            ET.SubElement(annotation, "P", attrib={"X": str(x), "Y": str(y)})
+            ET.SubElement(annotation, "P", attrib={"X": str(x - w / 2), "Y": str(y - h / 2)})
 
             ET.SubElement(annotation, "S", attrib={"H": str(h), "W": str(w)})
 
@@ -358,6 +358,49 @@ class MdsResults(Result):
         output_path = os.path.join(output_dir, f'notes')
         tree.write(output_path, encoding="utf-8", xml_declaration=True)
         print(f"XML 文件已保存到 {output_path}")
+
+
+class KVResults(MdsResults):
+    def post_process(self, coords, labels, base):
+        annotation = []
+        for idx, ([x, y, w, h], label) in enumerate(zip(coords, labels)):
+            annotation.append({
+                "points": [],
+                "imageId": 0,
+                "guid": f"{uuid.uuid4()}",
+                "name": f"矩形{idx}",
+                "imageindex": "1",
+                "isAllShow": False,
+                "isAlwaysShowDesc": True,
+                "description": "",
+                "scale": 0.0388786665223509,
+                "width": "2",
+                "type": "Rectangle",
+                "fontUnderLine": False,
+                "fontSize": 11,
+                "fontFamily": "Microsoft Sans Serif",
+                "fontItalic": False,
+                "fontBold": False,
+                "visible": True,
+                "color": self.color_dict[label],
+                "measurement": False,
+                "radius": 0,
+                "arcLength": 0,
+                "angle": 0,
+                "region": {
+                    "x": x - w / 2,
+                    "y": y - h / 2,
+                    "width": w,
+                    "height": h
+                }
+            })
+        base = base.replace('.', '_')
+        path = os.path.join(self.output_dir, f"{base}_kfb/Annotations/")
+        os.makedirs(path, exist_ok=True)
+        output_path = os.path.join(path, f"1.json")
+        with open(output_path, 'w') as f:
+            json.dump(annotation, f, indent=2)
+        logger.info(f'generated {base}.json contour json!!!')
 
 
 class LMResults(Result):

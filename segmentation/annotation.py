@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import os
+import random
 import shutil
 import sys
 import traceback
@@ -14,8 +15,6 @@ import numpy as np
 import openslide
 from PIL import Image
 from loguru import logger
-
-from ultralytics import YOLO
 
 sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
 from aslide import Aslide
@@ -195,6 +194,7 @@ class GeoAnnotation(Annotation):
                     continue
                 patch_coords = []
                 label_path = os.path.join(self.label_dir, f'{base}_{w}_{h}.txt')
+                to_remove = []
 
                 def contour(data, _w, _h):
                     lc_coords = []
@@ -217,18 +217,20 @@ class GeoAnnotation(Annotation):
                             contours_str = ' '.join(map(str, lc_coords))
                             name = feature.get('properties', {}).get('classification', {}).get('name', '')
                             color = feature.get('properties', {}).get('classification', {}).get('color', [])
-                            if name == 'non-cancer' or name == 'Negative':
+                            if name == 'non-cancer' or name == 'Negative' or color == [0, 255, 0]:
                                 clazz = 0
-                            elif name == 'Other':
-                                return
+                            elif name == 'Region*':
+                                clazz = 1
                             elif name == 'Necrosis':
                                 clazz = 2
-                            elif color == [0, 255, 0]:
-                                clazz = 0
+                            elif name == 'Other':
+                                return
                             else:
                                 clazz = 1
                             line = f'{clazz} {contours_str}'
                             f.write(line + '\n')
+                        if random.random() < 0.3:
+                            to_remove.append(feature)
 
                 with open(label_path, 'w') as f:
                     for feature in features:
@@ -242,6 +244,9 @@ class GeoAnnotation(Annotation):
                                 for sub_coords in coords:
                                     if isinstance(sub_coords, list):
                                         contour(sub_coords, w, h)
+                    for feature in to_remove:
+                        features.remove(feature)
+
                 patch = wsi.read_region((w, h), 0, (self.patch_size, self.patch_size))
                 if isinstance(patch, np.ndarray):
                     patch = Image.fromarray(patch)
@@ -270,7 +275,7 @@ class LMAnnotation(Annotation):
     def __init__(self, opt):
         super().__init__(opt)
         # self.lm_ann_dir = os.path.join(self.output_dir, f'lm_annotations/')
-        self.lm_ann_dir = '/NAS2/Data1/lbliao/Data/MXB/Seg-Relabel/dataset/data4/'
+        self.lm_ann_dir = '/NAS2/Data1/lbliao/Data/MXB/LabelMe/20250224/labelme'
         self.label_dir = os.path.join(self.output_dir, f'labels/')
         self.image_dir = os.path.join(self.output_dir, f'images/')
         os.makedirs(self.label_dir, exist_ok=True)
@@ -285,30 +290,34 @@ class LMAnnotation(Annotation):
         label_path = os.path.join(self.label_dir, f'{base}.txt')
         with open(label_path, 'w') as f:
             for shape in shapes:
-                if shape.get('label') == 'prostate':
+                if shape.get('label') in ['prostate', '电切烧灼腺体']:
                     clazz = 0
-                elif shape.get('label') == 'cancer':
+                elif shape.get('label') in ['cancer']:
                     clazz = 1
+                elif shape.get('label') in ['血管']:
+                    clazz = 2
+                elif shape.get('label') in ['神经节']:
+                    clazz = 3
+                elif shape.get('label') in ['鳞状上皮']:
+                    clazz = 4
                 if shape.get('shape_type') == 'polygon':
                     points = shape.get('points')
-                    points = [item / 1024 for sublist in points for item in sublist]
+                    points = [item / self.patch_size for sublist in points for item in sublist]
                 elif shape.get('shape_type') == 'rectangle':
                     points = shape.get('points')
                     [x1, y1], [x2, y2] = points[0], points[1]
-                    points = [x1 / 1024, y1 / 1024, x1 / 1024, y2 / 1024, x2 / 1024, y2 / 1024, x2 / 1024, y1 / 1024]
+                    points = [x1 / self.patch_size, y1 / self.patch_size, x1 / self.patch_size, y2 / self.patch_size, x2 / self.patch_size, y2 / self.patch_size, x2 / self.patch_size, y1 / self.patch_size]
                 contours_str = ' '.join(map(str, points))
                 line = f'{clazz} {contours_str}'
                 f.write(line + '\n')
-        img_name = f'{base}.png'
-        # shutil.copy(os.path.join(self.lm_ann_dir, img_name), os.path.join(self.image_dir, f'{base}.png'))
-        shutil.copy(os.path.join(self.lm_ann_dir, img_name), os.path.join(self.image_dir, img_name))
+        shutil.copy(os.path.join(self.lm_ann_dir, patch), os.path.join(self.image_dir, patch))
 
     def run(self, slide: str):
         self.get_contours(slide)
 
     def parallel_run(self):
         images = os.listdir(self.lm_ann_dir)
-        images = [img for img in images if img.endswith('.png')]
+        images = [img for img in images if img.endswith('.jpg')]
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = [executor.submit(self.run, img) for img in images]
             for future in as_completed(futures):
@@ -318,16 +327,14 @@ class LMAnnotation(Annotation):
                     traceback.print_exc()
 
 
-
-
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/0224', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/0224/dataset', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+/dataset', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=2048, help='output size')
@@ -337,3 +344,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
     GeoAnnotation(args).parallel_run()
+    # LMAnnotation(args).parallel_run()
