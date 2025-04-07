@@ -10,7 +10,8 @@ parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--output_dir', type=str, default='', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--infer_size', type=int, default=1536, help='patch size')
-parser.add_argument('--slide_list', type=list)#, default=['1920233C2024-11-01_13_26_37.kfb'])
+parser.add_argument('--slide_list', type=list,
+                    default=['1903106.3有癌.kfb', '1903106.4有癌.kfb'])
 if __name__ == '__main__':
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)

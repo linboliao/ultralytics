@@ -66,7 +66,7 @@ class Result:
             self.process(slide)
 
     def parallel_run(self):
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(self.process, slide) for slide in self.slides]
             for future in as_completed(futures):
                 try:

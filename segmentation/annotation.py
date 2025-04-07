@@ -327,8 +327,80 @@ class LMAnnotation(Annotation):
                     traceback.print_exc()
 
 
+class YOLO2LM(Annotation):
+    def __init__(self, opt):
+        super().__init__(opt)
+        self.data_root = opt.data_root
+        self.lm_ann_dir = os.path.join(self.data_root, f'lms/')
+        self.label_dir = os.path.join(self.data_root, f'labels/')
+        self.image_dir = os.path.join(self.data_root, f'images/')
+        os.makedirs(self.lm_ann_dir, exist_ok=True)
+        os.makedirs(self.label_dir, exist_ok=True)
+        os.makedirs(self.image_dir, exist_ok=True)
+
+    def get_contours(self, patch: str):
+        base, ext = os.path.splitext(patch)
+        ann_path = os.path.join(self.label_dir, f'{base}.txt')
+        with open(ann_path, 'r') as f:
+            lines = f.readlines()
+
+        new_lines = []
+        shapes = []
+        for line in lines:
+            stripped_line = line.strip()
+            if not stripped_line:
+                new_lines.append(line)
+                continue
+
+            elements = stripped_line.split(' ')
+            points = elements[1:]
+            paired = [[round(float(points[i]) * self.patch_size, 4), round(float(points[i + 1]) * self.patch_size, 4)] for i in range(0, len(points), 2)]
+            x_values = [x for x, y in paired]
+            y_values = [y for x, y in paired]
+
+            # 计算最值
+            min_x, max_x = max(min(x_values), 0), min(max(x_values), self.patch_size)
+            min_y, max_y = max(min(y_values), 0), min(max(y_values), self.patch_size)
+            points = [[min_x, min_y], [max_x, max_y]]
+            shapes.append({
+                "label": elements[0],
+                "points": points,
+                "group_id": None,
+                "description": "",
+                "shape_type": "rectangle",
+                "flags": {},
+                "mask": None
+            })
+        ann = {
+            "version": "5.6.0",
+            "flags": {},
+            "shapes": shapes,
+            "imagePath": f"{base}.jpg",
+            "imageData": None,
+            "imageHeight": self.patch_size,
+            "imageWidth": self.patch_size,
+        }
+        with open(os.path.join(self.lm_ann_dir, f'{base}.json'), 'w') as f:
+            json.dump(ann, f, indent=2)
+        logger.info(f'process {base}.jpg')
+
+    def run(self, slide: str):
+        self.get_contours(slide)
+
+    def parallel_run(self):
+        images = os.listdir(self.image_dir)
+        images = [img for img in images if img.endswith('.jpg')]
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [executor.submit(self.run, img) for img in images]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    traceback.print_exc()
+
+
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/2048-1', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
@@ -343,5 +415,6 @@ parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
-    GeoAnnotation(args).parallel_run()
+    # GeoAnnotation(args).parallel_run()
     # LMAnnotation(args).parallel_run()
+    YOLO2LM(args).parallel_run()

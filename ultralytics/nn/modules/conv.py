@@ -24,9 +24,8 @@ __all__ = (
     "Index",
     "PConv",
     "DySnakeConv",
+    "MultiMagConv",
 )
-
-from torchvision.ops import deform_conv2d
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
@@ -389,12 +388,12 @@ class DySnakeConv(nn.Module):
 
 
 class DSConv(nn.Module):
-    def __init__(self, in_ch, out_ch, morph, kernel_size=3, if_offset=True, extend_scope=1):
+    def __init__(self, c1, c2, morph, k=3, if_offset=True, extend_scope=1):
         """
         The Dynamic Snake Convolution
-        :param in_ch: input channel
-        :param out_ch: output channel
-        :param kernel_size: the size of kernel
+        :param c1: input channel
+        :param c2: output channel
+        :param k: the size of kernel
         :param extend_scope: the range to expand (default 1 for this method)
         :param morph: the morphology of the convolution kernel is mainly divided into two types
                         along the x-axis (0) and the y-axis (1) (see the paper for details)
@@ -402,27 +401,15 @@ class DSConv(nn.Module):
         """
         super(DSConv, self).__init__()
         # use the <offset_conv> to learn the deformable offset
-        self.offset_conv = nn.Conv2d(in_ch, 2 * kernel_size, 3, padding=1)
-        self.bn = nn.BatchNorm2d(2 * kernel_size)
-        self.kernel_size = kernel_size
+        self.offset_conv = nn.Conv2d(c1, 2 * k, 3, padding=1)
+        self.bn = nn.BatchNorm2d(2 * k)
+        self.kernel_size = k
 
         # two types of the DSConv (along x-axis and y-axis)
-        self.dsc_conv_x = nn.Conv2d(
-            in_ch,
-            out_ch,
-            kernel_size=(kernel_size, 1),
-            stride=(kernel_size, 1),
-            padding=0,
-        )
-        self.dsc_conv_y = nn.Conv2d(
-            in_ch,
-            out_ch,
-            kernel_size=(1, kernel_size),
-            stride=(1, kernel_size),
-            padding=0,
-        )
+        self.dsc_conv_x = nn.Conv2d(c1, c2, kernel_size=(k, 1), stride=(k, 1), padding=0)
+        self.dsc_conv_y = nn.Conv2d(c1, c2, kernel_size=(1, k), stride=(1, k), padding=0)
 
-        self.gn = nn.GroupNorm(out_ch // 4, out_ch)
+        self.gn = nn.GroupNorm(c2 // 4, c2)
         self.act = Conv.default_act
 
         self.extend_scope = extend_scope
@@ -720,3 +707,45 @@ class DSC(object):
         y, x = self._coordinate_map_3D(offset, if_offset)
         deformed_feature = self._bilinear_interpolate_3D(input, y, x)
         return deformed_feature
+
+
+class Fusion(nn.Module):
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
+        super().__init__()
+        self.Conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+    def forward(self, low, mid, high):
+        features = np.stack([low, mid, high])
+        return self.act(self.bn(self.conv(features)))
+
+    def forward_fuse(self, low, mid, high):
+        """Apply convolution and activation without batch normalization."""
+        features = np.stack([low, mid, high])
+        return self.act(self.conv(features))
+
+
+class MultiMagConv(Conv):
+    def __init__(self, c1, c2, k=1, s=1):
+        super().__init__(c1, c2)
+        self.layer_1_conv = PConv(c1, c1 * 2, k, s)
+        self.layer_1_fusion = Fusion(c1, c1 * 2, 1, s)
+
+        self.layer_2_conv = PConv(c1 * 2, c2, k, s)
+        self.layer_2_fusion = Fusion(c1 * 2, c2, 1, s)
+
+    def forward(self, x):
+        layer_1_low = self.layer_1_conv(x[0])
+        layer_1_mid = self.layer_1_conv(x[1])
+        layer_1_high = self.layer_1_conv(x[2])
+
+        layer_1_features = self.layer_1_fusion(layer_1_low, layer_1_mid, layer_1_high)
+
+        layer_2_low = self.layer_2_conv(layer_1_low)
+        layer_2_mid = self.layer_2_conv(layer_1_mid)
+        layer_2_high = self.layer_2_conv(layer_1_high)
+
+        layer_2_features = self.layer_2_fusion(layer_2_low, layer_2_mid, layer_2_high)
+        features = np.stack([layer_1_features, layer_2_features])
+        return self.act(self.bn(self.conv(features)))

@@ -77,6 +77,7 @@ from .conv import (
     SpatialAttention,
     PConv,
     DySnakeConv,
+    MultiMagConv,
 )
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (
@@ -166,4 +167,6 @@ __all__ = (
     "Index",
     "A2C2f",
     "PConv",
+    "DySnakeConv",
+    "MultiMagConv",
 )
