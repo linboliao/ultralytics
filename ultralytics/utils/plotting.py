@@ -1,4 +1,4 @@
-# Ultralytics YOLO 🚀, AGPL-3.0 license
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
 import math
 import warnings
@@ -28,6 +28,10 @@ class Colors:
         palette (list of tuple): List of RGB color values.
         n (int): The number of colors in the palette.
         pose_palette (np.ndarray): A specific color palette array with dtype np.uint8.
+
+    Examples:
+        >>> from ultralytics.utils.plotting import Colors
+        >>> color = Colors(5, True)  # ff6fdd or (255, 111, 221)
 
     ## Ultralytics Color Palette
 
@@ -162,6 +166,11 @@ class Annotator:
         skeleton (List[List[int]]): Skeleton structure for keypoints.
         limb_color (List[int]): Color palette for limbs.
         kpt_color (List[int]): Color palette for keypoints.
+
+    Examples:
+        >>> from ultralytics.utils.plotting import Annotator
+        >>> im0 = cv2.imread("test.png")
+        >>> annotator = Annotator(im0, line_width=10)
     """
 
     def __init__(self, im, line_width=None, font_size=None, font="Arial.ttf", pil=False, example="abc"):
@@ -247,6 +256,12 @@ class Annotator:
 
         Returns:
             txt_color (tuple): Text color for label
+
+        Examples:
+            >>> from ultralytics.utils.plotting import Annotator
+            >>> im0 = cv2.imread("test.png")
+            >>> annotator = Annotator(im0, line_width=10)
+            >>> annotator.get_txt_color(color=(104, 31, 17))  # return (255, 255, 255)
         """
         if color in self.dark_colors:
             return 104, 31, 17
@@ -343,6 +358,12 @@ class Annotator:
             color (tuple, optional): The background color of the rectangle (B, G, R).
             txt_color (tuple, optional): The color of the text (R, G, B).
             rotated (bool, optional): Variable used to check if task is OBB
+
+        Examples:
+            >>> from ultralytics.utils.plotting import Annotator
+            >>> im0 = cv2.imread("test.png")
+            >>> annotator = Annotator(im0, line_width=10)
+            >>> annotator.box_label(box=[10, 20, 30, 40], label="person")
         """
         txt_color = self.get_txt_color(color, txt_color)
         if isinstance(box, torch.Tensor):
@@ -545,7 +566,8 @@ class Annotator:
         """Save the annotated image to 'filename'."""
         cv2.imwrite(filename, np.asarray(self.im))
 
-    def get_bbox_dimension(self, bbox=None):
+    @staticmethod
+    def get_bbox_dimension(bbox=None):
         """
         Calculate the area of a bounding box.
 
@@ -556,6 +578,12 @@ class Annotator:
             width (float): Width of the bounding box.
             height (float): Height of the bounding box.
             area (float): Area enclosed by the bounding box.
+
+        Examples:
+            >>> from ultralytics.utils.plotting import Annotator
+            >>> im0 = cv2.imread("test.png")
+            >>> annotator = Annotator(im0, line_width=10)
+            >>> annotator.get_bbox_dimension(bbox=[10, 20, 30, 40])
         """
         x_min, y_min, x_max, y_max = bbox
         width = x_max - x_min
@@ -800,9 +828,8 @@ class Annotator:
             return
 
         cv2.polylines(self.im, [np.int32([mask])], isClosed=True, color=mask_color, thickness=2)
-        text_size, _ = cv2.getTextSize(label, 0, self.sf, self.tf)
-
         if label:
+            text_size, _ = cv2.getTextSize(label, 0, self.sf, self.tf)
             cv2.rectangle(
                 self.im,
                 (int(mask[0][0]) - text_size[0] // 2 - 10, int(mask[0][1]) - text_size[1] - 10),
@@ -1268,7 +1295,7 @@ def plt_color_scatter(v, f, bins=20, cmap="viridis", alpha=0.8, edgecolors="none
 
 def plot_tune_results(csv_file="tune_results.csv"):
     """
-    Plot the evolution results stored in an 'tune_results.csv' file. The function generates a scatter plot for each key
+    Plot the evolution results stored in a 'tune_results.csv' file. The function generates a scatter plot for each key
     in the CSV, color-coded based on fitness scores. The best-performing configurations are highlighted on the plots.
 
     Args:
@@ -1375,3 +1402,43 @@ def feature_visualization(x, module_type, stage, n=32, save_dir=Path("runs/detec
             plt.savefig(f, dpi=300, bbox_inches="tight")
             plt.close()
             np.save(str(f.with_suffix(".npy")), x[0].cpu().numpy())  # npy save
+
+
+def feature_visualization_merged(x, module_type, stage, merge_mode="mean", save_dir=Path("runs/detect/exp")):
+    """
+    Visualize merged feature maps of a given model module during inference.
+    Args:
+        x (torch.Tensor): Features to be visualized.
+        module_type (str): Module type.
+        stage (int): Module stage within the model.
+        merge_mode (str, optional): Mode to merge channels. Defaults to "mean". Options: "mean", "sum", "max".
+        save_dir (Path, optional): Directory to save results. Defaults to Path('runs/detect/exp').
+    """
+    for m in {"Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"}:  # all model heads
+        if m in module_type:
+            return
+    if isinstance(x, torch.Tensor):
+        _, channels, height, width = x.shape  # batch, channels, height, width
+        if height > 1 and width > 1:
+            # Save path
+            save_dir.mkdir(parents=True, exist_ok=True)
+            f = save_dir / f"stage{stage}_{module_type.split('.')[-1]}_merged_features.png"
+
+            # Merge channels
+            if merge_mode == "mean":
+                merged_feature = x[0].mean(dim=0).cpu()  # Channel-wise mean
+            elif merge_mode == "sum":
+                merged_feature = x[0].sum(dim=0).cpu()  # Channel-wise sum
+            elif merge_mode == "max":
+                merged_feature, _ = x[0].max(dim=0)  # Channel-wise max
+                merged_feature = merged_feature.cpu()
+            else:
+                raise ValueError(f"Unsupported merge_mode: {merge_mode}. Choose from 'mean', 'sum', 'max'.")
+
+            # Visualize
+            plt.figure(figsize=(6, 6))
+            plt.imshow(merged_feature, cmap="viridis")  # Use colormap for visualization
+            plt.axis("off")
+            plt.title(f"Stage {stage}: {module_type} (Merged: {merge_mode})")
+            plt.savefig(f)
+            plt.close()

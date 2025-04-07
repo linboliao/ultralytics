@@ -199,7 +199,6 @@ class Compose:
         """
         for t in self.transforms:
             data = t(data)
-        # data['img'] = torch.from_numpy(data['img'])
         return data
 
     def append(self, transform):
@@ -272,9 +271,9 @@ class Compose:
         """
         assert isinstance(index, (int, list)), f"The indices should be either list or int type but got {type(index)}"
         if isinstance(index, list):
-            assert isinstance(
-                value, list
-            ), f"The indices should be the same type as values, but got {type(index)} and {type(value)}"
+            assert isinstance(value, list), (
+                f"The indices should be the same type as values, but got {type(index)} and {type(value)}"
+            )
         if isinstance(index, int):
             index, value = [index], [value]
         for i, v in zip(index, value):
@@ -442,7 +441,8 @@ class BaseMixTransform:
         """
         raise NotImplementedError
 
-    def _update_label_text(self, labels):
+    @staticmethod
+    def _update_label_text(labels):
         """
         Updates label text and class IDs for mixed labels in image augmentation.
 
@@ -644,7 +644,7 @@ class Mosaic(BaseMixTransform):
             padw, padh = c[:2]
             x1, y1, x2, y2 = (max(x, 0) for x in c)  # allocate coords
 
-            img3[y1:y2, x1:x2] = img[y1 - padh:, x1 - padw:]  # img3[ymin:ymax, xmin:xmax]
+            img3[y1:y2, x1:x2] = img[y1 - padh :, x1 - padw :]  # img3[ymin:ymax, xmin:xmax]
             # hp, wp = h, w  # height, width previous for next iteration
 
             # Labels assuming imgsz*2 mosaic size
@@ -652,7 +652,7 @@ class Mosaic(BaseMixTransform):
             mosaic_labels.append(labels_patch)
         final_labels = self._cat_labels(mosaic_labels)
 
-        final_labels["img"] = img3[-self.border[0]: self.border[0], -self.border[1]: self.border[1]]
+        final_labels["img"] = img3[-self.border[0] : self.border[0], -self.border[1] : self.border[1]]
         return final_labels
 
     def _mosaic4(self, labels):
@@ -774,7 +774,7 @@ class Mosaic(BaseMixTransform):
             x1, y1, x2, y2 = (max(x, 0) for x in c)  # allocate coords
 
             # Image
-            img9[y1:y2, x1:x2] = img[y1 - padh:, x1 - padw:]  # img9[ymin:ymax, xmin:xmax]
+            img9[y1:y2, x1:x2] = img[y1 - padh :, x1 - padw :]  # img9[ymin:ymax, xmin:xmax]
             hp, wp = h, w  # height, width previous for next iteration
 
             # Labels assuming imgsz*2 mosaic size
@@ -782,7 +782,7 @@ class Mosaic(BaseMixTransform):
             mosaic_labels.append(labels_patch)
         final_labels = self._cat_labels(mosaic_labels)
 
-        final_labels["img"] = img9[-self.border[0]: self.border[0], -self.border[1]: self.border[1]]
+        final_labels["img"] = img9[-self.border[0] : self.border[0], -self.border[1] : self.border[1]]
         return final_labels
 
     @staticmethod
@@ -984,7 +984,7 @@ class RandomPerspective:
     """
 
     def __init__(
-            self, degrees=0.0, translate=0.1, scale=0.5, shear=0.0, perspective=0.0, border=(0, 0), pre_transform=None
+        self, degrees=0.0, translate=0.1, scale=0.5, shear=0.0, perspective=0.0, border=(0, 0), pre_transform=None
     ):
         """
         Initializes RandomPerspective object with transformation parameters.
@@ -1363,25 +1363,28 @@ class RandomHSV:
             >>> hsv_augmenter(labels)
             >>> augmented_img = labels["img"]
         """
-        # return labels
-        img = labels["img"]
         if self.hgain or self.sgain or self.vgain:
-            imgs = []
-            for i in range(0, 14, 3):
-                t_img = img[:, :, i:i + 3]
-                r = np.random.uniform(-1, 1, 3) * [self.hgain, self.sgain, self.vgain] + 1  # random gains
-                hue, sat, val = cv2.split(cv2.cvtColor(t_img, cv2.COLOR_BGR2HSV))
-                dtype = img.dtype  # uint8
+            img = labels["img"]
+            dtype = img.dtype  # uint8
 
-                x = np.arange(0, 256, dtype=r.dtype)
-                lut_hue = ((x * r[0]) % 180).astype(dtype)
-                lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
-                lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
+            # Original implementation (bug) from ultralytics<=8.3.78
+            # r = np.random.uniform(-1, 1, 3) * [self.hgain, self.sgain, self.vgain] + 1  # random gains
+            # x = np.arange(0, 256, dtype=r.dtype)
+            # lut_hue = ((x * r[0]) % 180).astype(dtype)
+            # lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
+            # lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
 
-                im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
-                t_img = cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR)  # no return needed
-                imgs.append(t_img)
-            labels["img"] = np.dstack(imgs)
+            # Fixed implementation in https://github.com/ultralytics/ultralytics/pull/19311
+            r = np.random.uniform(-1, 1, 3) * (self.hgain, self.sgain, self.vgain) * (180, 255, 255)  # random gains
+            x = np.arange(0, 256, dtype=r.dtype)
+            lut_hue = ((x + r[0]) % 180).astype(dtype)
+            lut_sat = np.clip(x + r[1], 0, 255).astype(dtype)
+            lut_val = np.clip(x + r[2], 0, 255).astype(dtype)
+            lut_sat[0] = 0  # prevent pure white changing color
+
+            hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
+            im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
+            cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
         return labels
 
 
@@ -1504,7 +1507,7 @@ class LetterBox:
         >>> updated_instances = result["instances"]
     """
 
-    def __init__(self, new_shape=(640, 640), auto=False, scaleFill=False, scaleup=True, center=True, stride=32):
+    def __init__(self, new_shape=(640, 640), auto=False, scale_fill=False, scaleup=True, center=True, stride=32):
         """
         Initialize LetterBox object for resizing and padding images.
 
@@ -1514,7 +1517,7 @@ class LetterBox:
         Args:
             new_shape (Tuple[int, int]): Target size (height, width) for the resized image.
             auto (bool): If True, use minimum rectangle to resize. If False, use new_shape directly.
-            scaleFill (bool): If True, stretch the image to new_shape without padding.
+            scale_fill (bool): If True, stretch the image to new_shape without padding.
             scaleup (bool): If True, allow scaling up. If False, only scale down.
             center (bool): If True, center the placed image. If False, place image in top-left corner.
             stride (int): Stride of the model (e.g., 32 for YOLOv5).
@@ -1522,17 +1525,17 @@ class LetterBox:
         Attributes:
             new_shape (Tuple[int, int]): Target size for the resized image.
             auto (bool): Flag for using minimum rectangle resizing.
-            scaleFill (bool): Flag for stretching image without padding.
+            scale_fill (bool): Flag for stretching image without padding.
             scaleup (bool): Flag for allowing upscaling.
             stride (int): Stride value for ensuring image size is divisible by stride.
 
         Examples:
-            >>> letterbox = LetterBox(new_shape=(640, 640), auto=False, scaleFill=False, scaleup=True, stride=32)
+            >>> letterbox = LetterBox(new_shape=(640, 640), auto=False, scale_fill=False, scaleup=True, stride=32)
             >>> resized_img = letterbox(original_img)
         """
         self.new_shape = new_shape
         self.auto = auto
-        self.scaleFill = scaleFill
+        self.scale_fill = scale_fill
         self.scaleup = scaleup
         self.stride = stride
         self.center = center  # Put the image in the middle or top-left
@@ -1578,7 +1581,7 @@ class LetterBox:
         dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
         if self.auto:  # minimum rectangle
             dw, dh = np.mod(dw, self.stride), np.mod(dh, self.stride)  # wh padding
-        elif self.scaleFill:  # stretch
+        elif self.scale_fill:  # stretch
             dw, dh = 0.0, 0.0
             new_unpad = (new_shape[1], new_shape[0])
             ratio = new_shape[1] / shape[1], new_shape[0] / shape[0]  # width, height ratios
@@ -1591,14 +1594,9 @@ class LetterBox:
             img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
         top, bottom = int(round(dh - 0.1)) if self.center else 0, int(round(dh + 0.1))
         left, right = int(round(dw - 0.1)) if self.center else 0, int(round(dw + 0.1))
-        imgs = []
-        for i in range(0, img.shape[2] - 1, 3):
-            t_img = img[:, :, i:i + 3]
-            t_img = cv2.copyMakeBorder(
-                t_img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
-            )  # add border
-            imgs.append(t_img)
-        img = np.dstack(imgs)
+        img = cv2.copyMakeBorder(
+            img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
+        )  # add border
         if labels.get("ratio_pad"):
             labels["ratio_pad"] = (labels["ratio_pad"], (left, top))  # for evaluation
 
@@ -1610,7 +1608,8 @@ class LetterBox:
         else:
             return img
 
-    def _update_labels(self, labels, ratio, padw, padh):
+    @staticmethod
+    def _update_labels(labels, ratio, padw, padh):
         """
         Updates labels after applying letterboxing to an image.
 
@@ -1859,7 +1858,7 @@ class Albumentations:
                 A.CLAHE(p=0.01),
                 A.RandomBrightnessContrast(p=0.0),
                 A.RandomGamma(p=0.0),
-                A.ImageCompression(quality_lower=75, p=0.0),
+                A.ImageCompression(quality_range=(75, 100), p=0.0),
             ]
 
             # Compose transforms
@@ -1869,6 +1868,9 @@ class Albumentations:
                 if self.contains_spatial
                 else A.Compose(T)
             )
+            if hasattr(self.transform, "set_random_seed"):
+                # Required for deterministic transforms in albumentations>=1.4.21
+                self.transform.set_random_seed(torch.initial_seed())
             LOGGER.info(prefix + ", ".join(f"{x}".replace("always_apply=False, ", "") for x in T if x.p))
         except ImportError:  # package not installed, skip
             pass
@@ -1906,7 +1908,6 @@ class Albumentations:
             - Spatial transforms update bounding boxes, while non-spatial transforms only modify the image.
             - Requires the Albumentations library to be installed.
         """
-        # return labels
         if self.transform is None or random.random() > self.p:
             return labels
 
@@ -1925,12 +1926,7 @@ class Albumentations:
                     bboxes = np.array(new["bboxes"], dtype=np.float32)
                 labels["instances"].update(bboxes=bboxes)
         else:
-            img = labels['img']
-            imgs = []
-            for i in range(0, 14, 3):
-                t_img = img[:, :, i:i + 3]
-                imgs.append(self.transform(image=t_img)["image"])
-            labels["img"] = np.dstack(imgs)  # transformed
+            labels["img"] = self.transform(image=labels["img"])["image"]  # transformed
 
         return labels
 
@@ -1966,16 +1962,16 @@ class Format:
     """
 
     def __init__(
-            self,
-            bbox_format="xywh",
-            normalize=True,
-            return_mask=False,
-            return_keypoint=False,
-            return_obb=False,
-            mask_ratio=4,
-            mask_overlap=True,
-            batch_idx=True,
-            bgr=0.0,
+        self,
+        bbox_format="xywh",
+        normalize=True,
+        return_mask=False,
+        return_keypoint=False,
+        return_obb=False,
+        mask_ratio=4,
+        mask_overlap=True,
+        batch_idx=True,
+        bgr=0.0,
     ):
         """
         Initializes the Format class with given parameters for image and instance annotation formatting.
@@ -2177,12 +2173,12 @@ class RandomLoadText:
     """
 
     def __init__(
-            self,
-            prompt_format: str = "{}",
-            neg_samples: Tuple[int, int] = (80, 80),
-            max_samples: int = 80,
-            padding: bool = False,
-            padding_value: str = "",
+        self,
+        prompt_format: str = "{}",
+        neg_samples: Tuple[int, int] = (80, 80),
+        max_samples: int = 80,
+        padding: bool = False,
+        padding_value: str = "",
     ) -> None:
         """
         Initializes the RandomLoadText class for randomly sampling positive and negative texts.
@@ -2356,11 +2352,11 @@ def v8_transforms(dataset, imgsz, hyp, stretch=False):
 
 # Classification augmentations -----------------------------------------------------------------------------------------
 def classify_transforms(
-        size=224,
-        mean=DEFAULT_MEAN,
-        std=DEFAULT_STD,
-        interpolation="BILINEAR",
-        crop_fraction: float = DEFAULT_CROP_FRACTION,
+    size=224,
+    mean=DEFAULT_MEAN,
+    std=DEFAULT_STD,
+    interpolation="BILINEAR",
+    crop_fraction: float = DEFAULT_CROP_FRACTION,
 ):
     """
     Creates a composition of image transforms for classification tasks.
@@ -2413,20 +2409,20 @@ def classify_transforms(
 
 # Classification training augmentations --------------------------------------------------------------------------------
 def classify_augmentations(
-        size=224,
-        mean=DEFAULT_MEAN,
-        std=DEFAULT_STD,
-        scale=None,
-        ratio=None,
-        hflip=0.5,
-        vflip=0.0,
-        auto_augment=None,
-        hsv_h=0.015,  # image HSV-Hue augmentation (fraction)
-        hsv_s=0.4,  # image HSV-Saturation augmentation (fraction)
-        hsv_v=0.4,  # image HSV-Value augmentation (fraction)
-        force_color_jitter=False,
-        erasing=0.0,
-        interpolation="BILINEAR",
+    size=224,
+    mean=DEFAULT_MEAN,
+    std=DEFAULT_STD,
+    scale=None,
+    ratio=None,
+    hflip=0.5,
+    vflip=0.0,
+    auto_augment=None,
+    hsv_h=0.015,  # image HSV-Hue augmentation (fraction)
+    hsv_s=0.4,  # image HSV-Saturation augmentation (fraction)
+    hsv_v=0.4,  # image HSV-Value augmentation (fraction)
+    force_color_jitter=False,
+    erasing=0.0,
+    interpolation="BILINEAR",
 ):
     """
     Creates a composition of image augmentation transforms for classification tasks.
@@ -2602,7 +2598,7 @@ class ClassifyLetterBox:
 
         # Create padded image
         im_out = np.full((hs, ws, 3), 114, dtype=im.dtype)
-        im_out[top: top + h, left: left + w] = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
+        im_out[top : top + h, left : left + w] = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
         return im_out
 
 
@@ -2678,7 +2674,7 @@ class CenterCrop:
         imh, imw = im.shape[:2]
         m = min(imh, imw)  # min dimension
         top, left = (imh - m) // 2, (imw - m) // 2
-        return cv2.resize(im[top: top + m, left: left + m], (self.w, self.h), interpolation=cv2.INTER_LINEAR)
+        return cv2.resize(im[top : top + m, left : left + m], (self.w, self.h), interpolation=cv2.INTER_LINEAR)
 
 
 # NOTE: keep this class for backward compatibility

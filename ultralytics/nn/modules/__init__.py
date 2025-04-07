@@ -1,4 +1,4 @@
-# Ultralytics YOLO 🚀, AGPL-3.0 license
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """
 Ultralytics modules.
 
@@ -30,6 +30,7 @@ from .block import (
     SPP,
     SPPELAN,
     SPPF,
+    A2C2f,
     AConv,
     ADown,
     Attention,
@@ -42,6 +43,7 @@ from .block import (
     C2fPSA,
     C3Ghost,
     C3k2,
+    C3k2DSC,
     C3x,
     CBFuse,
     CBLinear,
@@ -56,6 +58,7 @@ from .block import (
     RepVGGDW,
     ResNetLayer,
     SCDown,
+    TorchVision,
 )
 from .conv import (
     CBAM,
@@ -68,9 +71,13 @@ from .conv import (
     DWConvTranspose2d,
     Focus,
     GhostConv,
+    Index,
     LightConv,
     RepConv,
     SpatialAttention,
+    PConv,
+    DySnakeConv,
+    MultiMagConv,
 )
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (
@@ -156,4 +163,10 @@ __all__ = (
     "C2fCIB",
     "Attention",
     "PSA",
+    "TorchVision",
+    "Index",
+    "A2C2f",
+    "PConv",
+    "DySnakeConv",
+    "MultiMagConv",
 )
