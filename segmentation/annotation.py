@@ -229,8 +229,8 @@ class GeoAnnotation(Annotation):
                                 clazz = 1
                             line = f'{clazz} {contours_str}'
                             f.write(line + '\n')
-                        if random.random() < 0.3:
-                            to_remove.append(feature)
+                        # if random.random() < 0.3:
+                        #     to_remove.append(feature)
 
                 with open(label_path, 'w') as f:
                     for feature in features:
@@ -400,7 +400,7 @@ class YOLO2LM(Annotation):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/2048-1', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
@@ -415,6 +415,6 @@ parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
-    # GeoAnnotation(args).parallel_run()
+    GeoAnnotation(args).parallel_run()
     # LMAnnotation(args).parallel_run()
-    YOLO2LM(args).parallel_run()
+    # YOLO2LM(args).parallel_run()

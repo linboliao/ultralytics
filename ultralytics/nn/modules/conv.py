@@ -710,6 +710,7 @@ class DSC(object):
 
 
 class Fusion(nn.Module):
+    default_act = nn.SiLU()  # default activation
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         super().__init__()
         self.Conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
@@ -735,10 +736,14 @@ class MultiMagConv(Conv):
         self.layer_2_conv = PConv(c1 * 2, c2, k, s)
         self.layer_2_fusion = Fusion(c1 * 2, c2, 1, s)
 
+        self.pconv = PConv(c1, c2, k, s)
+
     def forward(self, x):
-        layer_1_low = self.layer_1_conv(x[0])
-        layer_1_mid = self.layer_1_conv(x[1])
-        layer_1_high = self.layer_1_conv(x[2])
+        if x.shape[2] != 9:
+            return self.pconv(x)
+        layer_1_low = self.layer_1_conv(x[:,:,0:3])
+        layer_1_mid = self.layer_1_conv(x[:,:,3:6])
+        layer_1_high = self.layer_1_conv(x[:,:,6:9])
 
         layer_1_features = self.layer_1_fusion(layer_1_low, layer_1_mid, layer_1_high)
 

@@ -1,7 +1,10 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
-
+import glob
 import json
+import math
+import os
 from collections import defaultdict
+from copy import deepcopy
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
@@ -35,7 +38,7 @@ from .utils import (
     load_dataset_cache_file,
     save_dataset_cache_file,
     verify_image,
-    verify_image_label,
+    verify_image_label, FORMATS_HELP_MSG, IMG_FORMATS,
 )
 
 # Ultralytics dataset *.cache version, >= 1.0.0 for YOLOv8
@@ -519,3 +522,166 @@ class ClassificationDataset:
             x["msgs"] = msgs  # warnings
             save_dataset_cache_file(self.prefix, path, x, DATASET_CACHE_VERSION)
             return samples
+
+
+
+class MultiMagDataset(YOLODataset):
+    def __init__(self, *args, data=None, task="detect", **kwargs):
+        """Initializes the YOLODataset with optional configurations for segments and keypoints."""
+        self.use_segments = task == "segment"
+        self.use_keypoints = task == "pose"
+        self.use_obb = task == "obb"
+        self.data = data
+        assert not (self.use_segments and self.use_keypoints), "Can not use both segments and keypoints."
+        super().__init__(*args, **kwargs)
+
+
+    def load_image(self, i, rect_mode=True):
+        """Loads 1 image from dataset index 'i', returns (im, resized hw)."""
+        im, f, fn = self.ims[i], self.im_files[i], self.npy_files[i]
+        if im is None:  # not cached in RAM
+            if fn.exists():  # load npy
+                try:
+                    im_low = np.load(fn.replace('/images/', '/images_low/'))
+                    im_mid = np.load(fn)
+                    im_high = np.load(fn.replace('/images/', '/images_high/'))
+                    im = np.dstack((im_low, im_mid, im_high))
+                except Exception as e:
+                    LOGGER.warning(f"{self.prefix}WARNING ⚠️ Removing corrupt *.npy image file {fn} due to: {e}")
+                    Path(fn).unlink(missing_ok=True)
+                    im_low = cv2.imread(f.replace('/images/', '/images_low/'))  # BGR
+                    im_mid = cv2.imread(f)  # BGR
+                    im_high = cv2.imread(f.replace('/images/', '/images_high/'))  # BGR
+                    im = np.dstack((im_low, im_mid, im_high))
+            else:  # read image
+                im_low = cv2.imread(f.replace('/images/', '/images_low/'))  # BGR
+                im_mid = cv2.imread(f)  # BGR
+                im_high = cv2.imread(f.replace('/images/', '/images_high/'))  # BGR
+                im = np.dstack((im_low, im_mid, im_high))
+            if im is None:
+                raise FileNotFoundError(f"Image Not Found {f}")
+
+            h0, w0 = im.shape[:2]  # orig hw
+            if rect_mode:  # resize long side to imgsz while maintaining aspect ratio
+                r = self.imgsz / max(h0, w0)  # ratio
+                if r != 1:  # if sizes are not equal
+                    w, h = (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz))
+                    im_low = cv2.resize(im_low, (w, h), interpolation=cv2.INTER_LINEAR)
+                    im_mid = cv2.resize(im_mid, (w, h), interpolation=cv2.INTER_LINEAR)
+                    im_high = cv2.resize(im_high, (w, h), interpolation=cv2.INTER_LINEAR)
+
+                    im = np.dstack((im_low, im_mid, im_high))
+            elif not (h0 == w0 == self.imgsz):  # resize by stretching image to square imgsz
+                im_low = cv2.resize(im_low, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
+                im_mid = cv2.resize(im_mid, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
+                im_high = cv2.resize(im_high, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
+                im = np.dstack((im_low, im_mid, im_high))
+
+            # Add to buffer if training with augmentations
+            if self.augment:
+                self.ims[i], self.im_hw0[i], self.im_hw[i] = im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
+                self.buffer.append(i)
+                if 1 < len(self.buffer) >= self.max_buffer_length:  # prevent empty buffer
+                    j = self.buffer.pop(0)
+                    if self.cache != "ram":
+                        self.ims[j], self.im_hw0[j], self.im_hw[j] = None, None, None
+
+            return im, (h0, w0), im.shape[:2]
+
+        return self.ims[i], self.im_hw0[i], self.im_hw[i]
+
+    # def get_img_files(self, img_path):
+    #     """Read image files."""
+    #     try:
+    #         f = []  # image files
+    #         for p in img_path if isinstance(img_path, list) else [img_path]:
+    #             p = Path(p)  # os-agnostic
+    #             if p.is_dir():  # dir
+    #                 f += glob.glob(str(p / "**" / "*.*"), recursive=True)
+    #                 # F = list(p.rglob('*.*'))  # pathlib
+    #             elif p.is_file():  # file
+    #                 with open(p) as t:
+    #                     t = t.read().strip().splitlines()
+    #                     parent = str(p.parent) + os.sep
+    #                     f += [x.replace("./", parent) if x.startswith("./") else x for x in t]  # local to global path
+    #                     # F += [p.parent / x.lstrip(os.sep) for x in t]  # local to global path (pathlib)
+    #             else:
+    #                 raise FileNotFoundError(f"{self.prefix}{p} does not exist")
+    #         im_files = sorted(x.replace("/", os.sep) for x in f if x.split(".")[-1].lower() in IMG_FORMATS)
+    #         # self.img_files = sorted([x for x in f if x.suffix[1:].lower() in IMG_FORMATS])  # pathlib
+    #         assert im_files, f"{self.prefix}No images found in {img_path}. {FORMATS_HELP_MSG}"
+    #         im_files = [[f.replace('/images/', '/images_low/'), f, f.replace('/images/', '/images_high/')] for f in
+    #                     im_files]
+    #     except Exception as e:
+    #         raise FileNotFoundError(f"{self.prefix}Error loading data from {img_path}\n{HELP_URL}") from e
+    #     if self.fraction < 1:
+    #         im_files = im_files[: round(len(im_files) * self.fraction)]  # retain a fraction of the dataset
+    #     return im_files
+
+    # def cache_images(self):
+    #     """Cache images to memory or disk."""
+    #     b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
+    #     fcn, storage = (self.cache_images_to_disk, "Disk") if self.cache == "disk" else (self.load_image, "RAM")
+    #     with ThreadPool(NUM_THREADS) as pool:
+    #         results = pool.imap(fcn, range(self.ni))
+    #         pbar = TQDM(enumerate(results), total=self.ni, disable=LOCAL_RANK > 0)
+    #         for i, x in pbar:
+    #             if self.cache == "disk":
+    #                 files = self.npy_files[i]
+    #                 for f in files:
+    #                     b += f.stat().st_size
+    #             else:  # 'ram'
+    #                 for _ in x:
+    #                     b += self.ims[i].nbytes
+    #                 self.ims[i], self.im_hw0[i], self.im_hw[i] = x  # im, hw_orig, hw_resized = load_image(self, i)
+    #             pbar.desc = f"{self.prefix}Caching images ({b / gb:.1f}GB {storage})"
+    #         pbar.close()
+
+    # def cache_images_to_disk(self, i):
+    #     """Saves an image as an *.npy file for faster loading."""
+    #     for j, f in enumerate(self.npy_files[i]):
+    #         if not f.exists():
+    #             np.save(f.as_posix(), cv2.imread(self.im_files[i][j]), allow_pickle=False)
+
+    # def get_labels(self):
+    #     """Returns dictionary of labels for YOLO training."""
+    #     im_files = [f[1] for f in self.im_files]
+    #     self.label_files = img2label_paths(im_files)
+    #     cache_path = Path(self.label_files[0]).parent.with_suffix(".cache")
+    #     try:
+    #         cache, exists = load_dataset_cache_file(cache_path), True  # attempt to load a *.cache file
+    #         assert cache["version"] == DATASET_CACHE_VERSION  # matches current version
+    #         assert cache["hash"] == get_hash(self.label_files + im_files)  # identical hash
+    #     except (FileNotFoundError, AssertionError, AttributeError):
+    #         cache, exists = self.cache_labels(cache_path), False  # run cache ops
+    #
+    #     # Display cache
+    #     nf, nm, ne, nc, n = cache.pop("results")  # found, missing, empty, corrupt, total
+    #     if exists and LOCAL_RANK in {-1, 0}:
+    #         d = f"Scanning {cache_path}... {nf} images, {nm + ne} backgrounds, {nc} corrupt"
+    #         TQDM(None, desc=self.prefix + d, total=n, initial=n)  # display results
+    #         if cache["msgs"]:
+    #             LOGGER.info("\n".join(cache["msgs"]))  # display warnings
+    #
+    #     # Read cache
+    #     [cache.pop(k) for k in ("hash", "version", "msgs")]  # remove items
+    #     labels = cache["labels"]
+    #     if not labels:
+    #         LOGGER.warning(f"WARNING ⚠️ No images found in {cache_path}, training may not work correctly. {HELP_URL}")
+    #     self.im_files = [[lb["im_file"].replace('/images/', '/images_low/'), lb["im_file"],
+    #                       lb["im_file"].replace('/images/', '/images_high/')] for lb in labels]  # update im_files
+    #
+    #     # Check if the dataset is all boxes or all segments
+    #     lengths = ((len(lb["cls"]), len(lb["bboxes"]), len(lb["segments"])) for lb in labels)
+    #     len_cls, len_boxes, len_segments = (sum(x) for x in zip(*lengths))
+    #     if len_segments and len_boxes != len_segments:
+    #         LOGGER.warning(
+    #             f"WARNING ⚠️ Box and segment counts should be equal, but got len(segments) = {len_segments}, "
+    #             f"len(boxes) = {len_boxes}. To resolve this only boxes will be used and all segments will be removed. "
+    #             "To avoid this please supply either a detect or segment dataset, not a detect-segment mixed dataset."
+    #         )
+    #         for lb in labels:
+    #             lb["segments"] = []
+    #     if len_cls == 0:
+    #         LOGGER.warning(f"WARNING ⚠️ No labels found in {cache_path}, training may not work correctly. {HELP_URL}")
+    #     return labels
