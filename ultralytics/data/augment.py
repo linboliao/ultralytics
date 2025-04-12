@@ -1393,7 +1393,7 @@ class RandomHSV:
                     continue
                 hue, sat, val = cv2.split(cv2.cvtColor(t_img, cv2.COLOR_BGR2HSV))
                 im_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
-                cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR, dst=t_img)  # no return needed
+                t_img = cv2.cvtColor(im_hsv, cv2.COLOR_HSV2BGR)  # no return needed
                 imgs.append(t_img)
             labels["img"] = np.dstack(imgs)
         return labels
@@ -1611,7 +1611,7 @@ class LetterBox:
                 t_img = cv2.resize(t_img, new_unpad, interpolation=cv2.INTER_LINEAR)
             top, bottom = int(round(dh - 0.1)) if self.center else 0, int(round(dh + 0.1))
             left, right = int(round(dw - 0.1)) if self.center else 0, int(round(dw + 0.1))
-            t_img = cv2.copyMakeBorder(t_img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))  # add border
+            t_img = cv2.copyMakeBorder(t_img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114, 114))  # add border
             n_img.append(t_img)
         img = np.dstack(n_img)
         if labels.get("ratio_pad"):

@@ -739,11 +739,11 @@ class MultiMagConv(Conv):
         self.pconv = PConv(c1, c2, k, s)
 
     def forward(self, x):
-        if x.shape[2] != 9:
+        if x.shape[1] < 9:
             return self.pconv(x)
-        layer_1_low = self.layer_1_conv(x[:,:,0:3])
-        layer_1_mid = self.layer_1_conv(x[:,:,3:6])
-        layer_1_high = self.layer_1_conv(x[:,:,6:9])
+        layer_1_low = self.layer_1_conv(x[:,0:3,:,:])
+        layer_1_mid = self.layer_1_conv(x[:,3:6,:,:])
+        layer_1_high = self.layer_1_conv(x[:,6:9,:,:])
 
         layer_1_features = self.layer_1_fusion(layer_1_low, layer_1_mid, layer_1_high)
 
