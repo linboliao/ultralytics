@@ -381,7 +381,7 @@ class DySnakeConv(nn.Module):
         self.conv_0 = Conv(inc, ouc, k, act=act)
         self.conv_x = DSConv(inc, ouc, 0, k)
         self.conv_y = DSConv(inc, ouc, 1, k)
-        self.conv_1x1 = Conv(ouc * 3, ouc, 1, act=act)
+        self.conv_1x1 = Conv(ouc * 3, ouc, 1, 2, act=act)
 
     def forward(self, x):
         return self.conv_1x1(torch.cat([self.conv_0(x), self.conv_x(x), self.conv_y(x)], dim=1))
@@ -731,18 +731,32 @@ class Fusion(nn.Module):
 class MultiMagConv(Conv):
     def __init__(self, c1, c2, k=1, s=1):
         super().__init__(c1, c2)
-        self.layer_1_conv = PConv(c1, c2 // 2, k, s)
-        self.layer_1_fusion = nn.Sequential(Fusion(c2 // 2 * 3, c2 // 2), Conv2(c2 // 2, c2, 1, s))
-        self.layer_2_conv = PConv(c2 // 2, c2, k, s)
+        self.layer_1_conv = Conv(c1, c2 // 2, k, s)
+        self.layer_1_conv_low = Conv(c1, c2 // 2, k, s)
+        self.layer_1_conv_mid = PConv(c1, c2 // 2, k, s)
+        self.layer_1_conv_high = DySnakeConv(c1, c2 // 2, k)
+        self.layer_1_fusion = nn.Sequential(Fusion(c2 // 2 * 3, c2 // 2), Conv(c2 // 2, c2, 1, s))
+        self.layer_2_conv = Conv(c2 // 2, c2, k, s)
+        self.layer_2_conv_low = Conv(c2 // 2, c2, k, s)
+        self.layer_2_conv_mid = PConv(c2 // 2, c2, k, s)
+        self.layer_2_conv_high = DySnakeConv(c2 // 2, c2, k)
         self.layer_2_fusion = Fusion(c2 * 3, c2, 1, 1)
 
         self.pconv = PConv(c1, c2, k, s)
 
-        self.fusion = Conv2(c2 * 2, c2, 1, 1)
+        self.fusion = Conv(c2 * 2, c2, 1, 1)
 
     def forward(self, x):
         if x.shape[1] < 9:
             return self.pconv(x)
+        if x.shape[2] > 1024 and x.shape[2]!=2048:
+            left = (x.shape[2] - 1024) // 2
+            right = x.shape[2] - 1024 - left
+            x = x[:, :, left:-right, :]
+        if x.shape[3] > 1024 and x.shape[3]!=2048:
+            left = (x.shape[3] - 1024) // 2
+            right = x.shape[3] - 1024 - left
+            x = x[:, :, :, left:-right]
         layer_1_low = self.layer_1_conv(x[:, 0:3, :, :])
         layer_1_mid = self.layer_1_conv(x[:, 3:6, :, :])
         layer_1_high = self.layer_1_conv(x[:, 6:9, :, :])
