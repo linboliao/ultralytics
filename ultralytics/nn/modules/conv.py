@@ -711,46 +711,48 @@ class DSC(object):
 
 class Fusion(nn.Module):
     default_act = nn.SiLU()  # default activation
+
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         super().__init__()
-        self.Conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2)
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
 
-    def forward(self, low, mid, high):
-        features = np.stack([low, mid, high])
+    def forward(self, x):
+        features = torch.cat(x, dim=1)
         return self.act(self.bn(self.conv(features)))
 
     def forward_fuse(self, low, mid, high):
         """Apply convolution and activation without batch normalization."""
-        features = np.stack([low, mid, high])
+        features = torch.cat([low, mid, high], dim=1)
         return self.act(self.conv(features))
 
 
 class MultiMagConv(Conv):
     def __init__(self, c1, c2, k=1, s=1):
         super().__init__(c1, c2)
-        self.layer_1_conv = PConv(c1, c1 * 2, k, s)
-        self.layer_1_fusion = Fusion(c1, c1 * 2, 1, s)
-
-        self.layer_2_conv = PConv(c1 * 2, c2, k, s)
-        self.layer_2_fusion = Fusion(c1 * 2, c2, 1, s)
+        self.layer_1_conv = PConv(c1, c2 // 2, k, s)
+        self.layer_1_fusion = nn.Sequential(Fusion(c2 // 2 * 3, c2 // 2), Conv2(c2 // 2, c2, 1, s))
+        self.layer_2_conv = PConv(c2 // 2, c2, k, s)
+        self.layer_2_fusion = Fusion(c2 * 3, c2, 1, 1)
 
         self.pconv = PConv(c1, c2, k, s)
+
+        self.fusion = Conv2(c2 * 2, c2, 1, 1)
 
     def forward(self, x):
         if x.shape[1] < 9:
             return self.pconv(x)
-        layer_1_low = self.layer_1_conv(x[:,0:3,:,:])
-        layer_1_mid = self.layer_1_conv(x[:,3:6,:,:])
-        layer_1_high = self.layer_1_conv(x[:,6:9,:,:])
+        layer_1_low = self.layer_1_conv(x[:, 0:3, :, :])
+        layer_1_mid = self.layer_1_conv(x[:, 3:6, :, :])
+        layer_1_high = self.layer_1_conv(x[:, 6:9, :, :])
 
-        layer_1_features = self.layer_1_fusion(layer_1_low, layer_1_mid, layer_1_high)
+        layer_1_features = self.layer_1_fusion([layer_1_low, layer_1_mid, layer_1_high])
 
         layer_2_low = self.layer_2_conv(layer_1_low)
         layer_2_mid = self.layer_2_conv(layer_1_mid)
         layer_2_high = self.layer_2_conv(layer_1_high)
 
-        layer_2_features = self.layer_2_fusion(layer_2_low, layer_2_mid, layer_2_high)
-        features = np.stack([layer_1_features, layer_2_features])
-        return self.act(self.bn(self.conv(features)))
+        layer_2_features = self.layer_2_fusion([layer_2_low, layer_2_mid, layer_2_high])
+        features = torch.cat([layer_1_features, layer_2_features], dim=1)
+        return self.act(self.bn(self.fusion(features)))
