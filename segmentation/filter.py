@@ -135,10 +135,10 @@ def size_filter1():
 
 # 指定你的文件夹路径
 def split_data():
-    he_dir = r'/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+/dataset/images'
-    ann_path = r'/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+/dataset/labels'
+    he_dir = r'/NAS2/Data1/lbliao/Data/MXB/Detection/0307/dataset/MultiMag/images'
+    ann_path = r'/NAS2/Data1/lbliao/Data/MXB/Detection/0307/dataset/MultiMag/labels'
 
-    img_dir = r'/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+/dataset/2048'
+    img_dir = r'/NAS2/Data1/lbliao/Data/MXB/Detection/0307/dataset/MultiMag/1024'
     os.makedirs(img_dir, exist_ok=True)
 
     he_imgs = os.listdir(he_dir)
@@ -147,22 +147,34 @@ def split_data():
     train = int(length * 0.7)
     for i in range(train):
         base, ext = os.path.splitext(he_imgs[i])
+        img_low = os.path.join(img_dir, 'train/images_low')
         img = os.path.join(img_dir, 'train/images')
+        img_high = os.path.join(img_dir, 'train/images_high')
         label = os.path.join(img_dir, 'train/labels')
+        os.makedirs(img_low, exist_ok=True)
         os.makedirs(img, exist_ok=True)
+        os.makedirs(img_high, exist_ok=True)
         os.makedirs(label, exist_ok=True)
         if os.path.exists(os.path.join(img, he_imgs[i])):
             continue
         shutil.copy(os.path.join(he_dir, he_imgs[i]), os.path.join(img, he_imgs[i]))
+        shutil.copy(os.path.join(he_dir.replace('/images', '/images_low'), he_imgs[i]), os.path.join(img_low, he_imgs[i]))
+        shutil.copy(os.path.join(he_dir.replace('/images', '/images_high'), he_imgs[i]), os.path.join(img_high, he_imgs[i]))
         shutil.copy(os.path.join(ann_path, f'{base}.txt'), os.path.join(label, f'{base}.txt'))
 
     for i in range(train, length):
         base, ext = os.path.splitext(he_imgs[i])
         img = os.path.join(img_dir, 'val/images')
+        img_low = os.path.join(img_dir, 'val/images_low')
+        img_high = os.path.join(img_dir, 'val/images_high')
         label = os.path.join(img_dir, 'val/labels')
         os.makedirs(img, exist_ok=True)
+        os.makedirs(img_low, exist_ok=True)
+        os.makedirs(img_high, exist_ok=True)
         os.makedirs(label, exist_ok=True)
         shutil.copy(os.path.join(he_dir, he_imgs[i]), os.path.join(img, he_imgs[i]))
+        shutil.copy(os.path.join(he_dir.replace('/images', '/images_low'), he_imgs[i]), os.path.join(img_low, he_imgs[i]))
+        shutil.copy(os.path.join(he_dir.replace('/images', '/images_high'), he_imgs[i]), os.path.join(img_high, he_imgs[i]))
         shutil.copy(os.path.join(ann_path, f'{base}.txt'), os.path.join(label, f'{base}.txt'))
 
 

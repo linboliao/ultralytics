@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import matplotlib.pyplot as plt
 import cv2
 import h5py
+import random
 import numpy as np
 import openslide
 from PIL import Image
@@ -21,6 +22,8 @@ sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
 from aslide import Aslide
 
 MIN_AREA = 3000
+
+
 def is_background(img, threshold=5):
     img_array = np.array(img)
     pixel_max = np.max(img_array, axis=2)
@@ -29,6 +32,7 @@ def is_background(img, threshold=5):
     tissue_percent = np.sum(difference > threshold) / (img_array.shape[0] * img_array.shape[1])
 
     return tissue_percent < 0.05
+
 
 class Annotation:
     def __init__(self, opt):
@@ -399,22 +403,135 @@ class YOLO2LM(Annotation):
                     traceback.print_exc()
 
 
+class MultiMagGeo(GeoAnnotation):
+    def __init__(self, opt):
+        super().__init__(opt)
+        os.makedirs(self.image_dir.replace('/images/', '/images_low/'), exist_ok=True)
+        os.makedirs(self.image_dir.replace('/images/', '/images_high/'), exist_ok=True)
+
+    def get_contours(self, slide):
+        wsi_path = os.path.join(self.slide_dir, slide)
+        base, ext = os.path.splitext(slide)
+        logger.info(f'start to process {slide}')
+
+        if ext == '.kfb':
+            wsi = Aslide(wsi_path)
+            width, height = wsi.level_dimensions[0]
+            mpp = wsi.mpp
+        elif ext == '.tif':
+            wsi = Image.open(wsi_path)
+            width, height = wsi.size[0], wsi.size[1]
+            mpp = 20
+        else:
+            wsi = openslide.OpenSlide(wsi_path)
+            width, height = wsi.level_dimensions[0]
+            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
+        ann_path = os.path.join(self.geo_ann_dir, f'{base}.geojson')
+        with open(ann_path, 'r', encoding='utf-8') as file:
+            anns = json.load(file)
+        features = anns.get('features')
+        step = int(self.patch_size * (mpp / 20))
+        for w in range(int(step * 1.5), width - int(step * 1.5), step):
+            for h in range(int(step * 1.5), height - int(step * 1.5), step):
+                img_low = wsi.read_region((w, h), 0, (step, step))
+                img_mid = wsi.read_region((w - int(step * 0.5), h - int(step * 0.5)), 0, (step * 2, step * 2))
+                img_high = wsi.read_region((w - int(step * 1.5), h - int(step * 1.5)), 0, (step * 4, step * 4))
+
+                if is_background(img_high):
+                    continue
+
+                if self.skip_done and os.path.isfile(os.path.join(self.image_dir, f'{base}_{w}_{h}.png')):
+                    continue
+                patch_coords = []
+                label_path = os.path.join(self.label_dir, f'{base}_{w}_{h}.txt')
+                to_remove = []
+
+                def contour(data, _w, _h):
+                    lc_coords = []
+                    if any(_w < a < _w + self.patch_size and _h < b < _h + self.patch_size for (a, b) in data):
+                        data = [[a - _w, b - _h] for [a, b] in data]
+                        patch_coords.append(data)
+                        data = np.array(data)
+                        contours = np.squeeze(data.reshape(-1, 1))
+                        contours = contours / self.patch_size
+                        flag = True
+                        for i in range(0, len(contours), 2):
+                            if 0 < float(contours[i]) < 1 and 0 < float(contours[i + 1]) < 1:
+                                lc_coords.append(float(contours[i]))
+                                lc_coords.append(float(contours[i + 1]))
+                            elif flag:
+                                lc_coords.append(min(max(0, float(contours[i])), 1))
+                                lc_coords.append(min(max(0, float(contours[i + 1])), 1))
+                                flag = False
+                        if len(lc_coords) >= 6 and len(lc_coords) % 2 == 0:
+                            contours_str = ' '.join(map(str, lc_coords))
+                            name = feature.get('properties', {}).get('classification', {}).get('name', '')
+                            color = feature.get('properties', {}).get('classification', {}).get('color', [])
+                            if name == 'non-cancer' or name == 'Negative' or color == [0, 255, 0]:
+                                clazz = 0
+                            elif name == 'Region*':
+                                clazz = 1
+                            elif name == 'Necrosis':
+                                clazz = 2
+                            elif name == 'Other':
+                                return
+                            else:
+                                clazz = 1
+                            line = f'{clazz} {contours_str}'
+                            f.write(line + '\n')
+                        if random.random() < 0.2:
+                            to_remove.append(feature)
+
+                with open(label_path, 'w') as f:
+                    for feature in features:
+                        coordinates = feature['geometry']['coordinates']
+                        if feature['geometry']['type'] == 'Polygon':
+                            for coords in coordinates:
+                                if isinstance(coords, list):
+                                    contour(coords, w, h)
+                        elif feature['geometry']['type'] == 'MultiPolygon':
+                            for coords in coordinates:
+                                for sub_coords in coords:
+                                    if isinstance(sub_coords, list):
+                                        contour(sub_coords, w, h)
+                    # for feature in to_remove:
+                    #     features.remove(feature)
+
+                if isinstance(img_low, np.ndarray):
+                    img_low = Image.fromarray(img_low)
+                if isinstance(img_mid, np.ndarray):
+                    img_mid = Image.fromarray(img_mid)
+                if isinstance(img_high, np.ndarray):
+                    img_high = Image.fromarray(img_high)
+                img_low.save(os.path.join(self.contour_dir, f'{base}_{w}_{h}.png'))
+                self.show_contours(f'{base}_{w}_{h}.png', patch_coords)
+                img_low = img_low.resize((self.output_size, self.output_size))
+                img_mid = img_mid.resize((self.output_size, self.output_size))
+                img_high = img_high.resize((self.output_size, self.output_size))
+                image_path = os.path.join(self.image_dir, f'{base}_{w}_{h}.png')
+                img_low.save(image_path.replace('/images/', '/images_low/'), quality=95)
+                img_mid.save(image_path, quality=95)
+                img_high.save(image_path.replace('/images/', '/images_high/'), quality=95)
+                logger.info(f'{base}_{w}_{h}.png Annotation generated')
+
+
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0307', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+/dataset', help='output directory')
-parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0307/dataset/MultiMag/', help='output directory')
+parser.add_argument('--patch_size', type=int, default=1024, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
-parser.add_argument('--output_size', type=int, default=2048, help='output size')
+parser.add_argument('--output_size', type=int, default=1024, help='output size')
 parser.add_argument('--skip_done', action='store_true', help='skip done')
 parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
-    GeoAnnotation(args).parallel_run()
+    # GeoAnnotation(args).parallel_run()
     # LMAnnotation(args).parallel_run()
     # YOLO2LM(args).parallel_run()
+    MultiMagGeo(args).parallel_run()
