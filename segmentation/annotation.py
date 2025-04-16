@@ -543,14 +543,14 @@ class MultiMagGeo(GeoAnnotation):
                     img_mid.save(image_path, quality=95)
                     img_high.save(image_path.replace('/images/', '/images_high/'), quality=95)
                     logger.info(f'{base}_{w}_{h}.png Annotation generated')
-                    shutil.copy(os.path.join(self.label_dir, f'{base}_{w}_{h}.txt'), os.path.join(self.train_label_dir, f'{base}_{w}_{h}.png'))
+                    shutil.copy(os.path.join(self.label_dir, f'{base}_{w}_{h}.txt'), os.path.join(self.train_label_dir, f'{base}_{w}_{h}.txt'))
                 else:
                     image_path = os.path.join(self.val_image_dir, f'{base}_{w}_{h}.png')
                     img_low.save(image_path.replace('/images/', '/images_low/'), quality=95)
                     img_mid.save(image_path, quality=95)
                     img_high.save(image_path.replace('/images/', '/images_high/'), quality=95)
                     logger.info(f'{base}_{w}_{h}.png Annotation generated')
-                    shutil.copy(os.path.join(self.label_dir, f'{base}_{w}_{h}.txt'), os.path.join(self.val_label_dir, f'{base}_{w}_{h}.png'))
+                    shutil.copy(os.path.join(self.label_dir, f'{base}_{w}_{h}.txt'), os.path.join(self.val_label_dir, f'{base}_{w}_{h}.txt'))
 
 
 parser = argparse.ArgumentParser()
