@@ -16,8 +16,8 @@ import openslide
 from PIL import Image
 from loguru import logger
 
-sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
-from aslide import Aslide
+# sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
+# from aslide import Aslide
 
 MIN_AREA = 3000
 
@@ -137,10 +137,19 @@ class GeoAnnotation(Annotation):
         self.slide_list = opt.slide_list
 
         self.label_dir = os.path.join(self.output_dir, f'labels/')
+        self.train_label_dir = os.path.join(self.output_dir, f'train/labels/')
+        self.val_label_dir = os.path.join(self.output_dir, f'val/labels/')
         self.image_dir = os.path.join(self.output_dir, f'images/')
+        self.train_image_dir = os.path.join(self.output_dir, f'train/images/')
+        self.val_image_dir = os.path.join(self.output_dir, f'val/images/')
+
         self.contour_dir = os.path.join(self.output_dir, f'contours/')
         os.makedirs(self.label_dir, exist_ok=True)
+        os.makedirs(self.train_label_dir, exist_ok=True)
+        os.makedirs(self.val_label_dir, exist_ok=True)
         os.makedirs(self.image_dir, exist_ok=True)
+        os.makedirs(self.train_image_dir, exist_ok=True)
+        os.makedirs(self.val_image_dir, exist_ok=True)
         os.makedirs(self.contour_dir, exist_ok=True)
 
     @property
@@ -253,8 +262,15 @@ class GeoAnnotation(Annotation):
                 patch.save(os.path.join(self.contour_dir, f'{base}_{w}_{h}.png'))
                 self.show_contours(f'{base}_{w}_{h}.png', patch_coords)
                 patch = patch.resize((self.output_size, self.output_size))
-                image_path = os.path.join(self.image_dir, f'{base}_{w}_{h}.png')
-                patch.save(image_path, quality=95)
+
+                if random.random() < 0.7:
+                    image_path = os.path.join(self.train_image_dir, f'{base}_{w}_{h}.png')
+                    patch.save(image_path, quality=95)
+                    shutil.copy(label_path, os.path.join(self.train_label_dir, f'{base}_{w}_{h}.txt'))
+                else:
+                    image_path = os.path.join(self.val_image_dir, f'{base}_{w}_{h}.png')
+                    patch.save(image_path, quality=95)
+                    shutil.copy(label_path, os.path.join(self.val_label_dir, f'{base}_{w}_{h}.txt'))
 
                 logger.info(f'{base}_{w}_{h}.png Annotation generated')
 
@@ -400,13 +416,13 @@ class YOLO2LM(Annotation):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/2048-1', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/nfsdata/duzhicheng/linboliao/Dataset/cellvit/', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/cellvit+/dataset', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/nfsdata/duzhicheng/linboliao/Dataset/cellvit/', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=2048, help='output size')
@@ -415,6 +431,6 @@ parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
-    # GeoAnnotation(args).parallel_run()
+    GeoAnnotation(args).parallel_run()
     # LMAnnotation(args).parallel_run()
-    YOLO2LM(args).parallel_run()
+    # YOLO2LM(args).parallel_run()
