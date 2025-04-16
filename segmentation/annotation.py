@@ -16,10 +16,10 @@ import openslide
 from PIL import Image
 from loguru import logger
 
-from ultralytics import YOLO
-
-sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
-from aslide import Aslide
+# from ultralytics import YOLO
+#
+# sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
+# from aslide import Aslide
 
 MIN_AREA = 3000
 
@@ -423,8 +423,20 @@ class YOLO2LM(Annotation):
 class MultiMagGeo(GeoAnnotation):
     def __init__(self, opt):
         super().__init__(opt)
-        os.makedirs(self.image_dir.replace('/images/', '/images_low/'), exist_ok=True)
-        os.makedirs(self.image_dir.replace('/images/', '/images_high/'), exist_ok=True)
+        self.train_image_dir = os.path.join(self.output_dir, f'train/images/')
+        self.val_image_dir = os.path.join(self.output_dir, f'val/images/')
+        self.train_label_dir = os.path.join(self.output_dir, f'train/labels/')
+        self.val_label_dir = os.path.join(self.output_dir, f'val/labels/')
+
+        os.makedirs(self.train_image_dir, exist_ok=True)
+        os.makedirs(self.val_image_dir, exist_ok=True)
+
+        os.makedirs(self.train_image_dir.replace('/images/', '/images_low/'), exist_ok=True)
+        os.makedirs(self.val_image_dir.replace('/images/', '/images_low/'), exist_ok=True)
+        os.makedirs(self.train_image_dir.replace('/images/', '/images_high/'), exist_ok=True)
+        os.makedirs(self.val_image_dir.replace('/images/', '/images_high/'), exist_ok=True)
+        os.makedirs(self.train_label_dir.replace('/images/', '/images_high/'), exist_ok=True)
+        os.makedirs(self.val_label_dir.replace('/images/', '/images_high/'), exist_ok=True)
 
     def get_contours(self, slide):
         wsi_path = os.path.join(self.slide_dir, slide)
@@ -448,11 +460,11 @@ class MultiMagGeo(GeoAnnotation):
             anns = json.load(file)
         features = anns.get('features')
         step = int(self.patch_size * (mpp / 20))
-        for w in range(int(step * 1.5), width - int(step * 1.5), step):
-            for h in range(int(step * 1.5), height - int(step * 1.5), step):
-                img_low = wsi.read_region((w, h), 0, (step, step))
-                img_mid = wsi.read_region((w - int(step * 0.5), h - int(step * 0.5)), 0, (step * 2, step * 2))
-                img_high = wsi.read_region((w - int(step * 1.5), h - int(step * 1.5)), 0, (step * 4, step * 4))
+        for w in range(int(step * 0.25), width - int(step * 0.25), step):
+            for h in range(int(step * 0.25), height - int(step * 0.25), step):
+                img_low = wsi.read_region((w + int(step * 0.125), h + int(step * 0.125)), 0, (int(step * 0.75), int(step * 0.75)))
+                img_mid = wsi.read_region((w, h), 0, (step, step))
+                img_high = wsi.read_region((w - int(step * 0.25), h - int(step * 0.25)), 0, (int(step * 1.5), int(step * 1.5)))
 
                 if is_background(img_high):
                     continue
@@ -525,21 +537,30 @@ class MultiMagGeo(GeoAnnotation):
                 img_low = img_low.resize((self.output_size, self.output_size))
                 img_mid = img_mid.resize((self.output_size, self.output_size))
                 img_high = img_high.resize((self.output_size, self.output_size))
-                image_path = os.path.join(self.image_dir, f'{base}_{w}_{h}.png')
-                img_low.save(image_path.replace('/images/', '/images_low/'), quality=95)
-                img_mid.save(image_path, quality=95)
-                img_high.save(image_path.replace('/images/', '/images_high/'), quality=95)
-                logger.info(f'{base}_{w}_{h}.png Annotation generated')
+                if random.random() < 0.7:
+                    image_path = os.path.join(self.train_image_dir, f'{base}_{w}_{h}.png')
+                    img_low.save(image_path.replace('/images/', '/images_low/'), quality=95)
+                    img_mid.save(image_path, quality=95)
+                    img_high.save(image_path.replace('/images/', '/images_high/'), quality=95)
+                    logger.info(f'{base}_{w}_{h}.png Annotation generated')
+                    shutil.copy(os.path.join(self.label_dir, f'{base}_{w}_{h}.txt'), os.path.join(self.train_label_dir, f'{base}_{w}_{h}.png'))
+                else:
+                    image_path = os.path.join(self.val_image_dir, f'{base}_{w}_{h}.png')
+                    img_low.save(image_path.replace('/images/', '/images_low/'), quality=95)
+                    img_mid.save(image_path, quality=95)
+                    img_high.save(image_path.replace('/images/', '/images_high/'), quality=95)
+                    logger.info(f'{base}_{w}_{h}.png Annotation generated')
+                    shutil.copy(os.path.join(self.label_dir, f'{base}_{w}_{h}.txt'), os.path.join(self.val_label_dir, f'{base}_{w}_{h}.png'))
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0224', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/nfsdata/duzhicheng/linboliao/Dataset/0307/', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0224/dataset/vessel/', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/nfsdata/duzhicheng/linboliao/Dataset/0307/dataset/MultiMag/', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=2048, help='output size')
@@ -548,7 +569,7 @@ parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
-    GeoAnnotation(args).parallel_run()
+    # GeoAnnotation(args).parallel_run()
     # LMAnnotation(args).parallel_run()
     # YOLO2LM(args).parallel_run()
-    # MultiMagGeo(args).parallel_run()
+    MultiMagGeo(args).parallel_run()
