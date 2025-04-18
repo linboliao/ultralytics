@@ -1,0 +1,18 @@
+# Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
+path:  # dataset root dir
+train:
+    - /nfsdata/duzhicheng/linboliao/Dataset/main/train/
+    - /nfsdata/duzhicheng/linboliao/Dataset/cellvit/train/
+val:
+    - /nfsdata/duzhicheng/linboliao/Dataset/main/val/
+    - /nfsdata/duzhicheng/linboliao/Dataset/cellvit/val/
+
+
+# Classes (80 COCO classes)
+names:
+    0: normal
+    1: cancer
+#    2: burn
+#    3: vessel
+#    4: epithelium
+#    5: ganglion
