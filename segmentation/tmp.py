@@ -57,10 +57,10 @@ with open(os.path.join('/NAS2/Data1/lbliao/Data/MXB/123/', f'result.geojson'), '
     json.dump(geojson, f, indent=2)
     print(f'generated result.geojson contour json!!!')
 
-slides = os.listdir('/NAS2/Data1/lbliao/Data/MXB/Detection/0401/slides')
-slides = [slide.replace('.svs', '') for slide in slides]
-for slide in slides:
-    cells_path = f'/NAS2/Data1/lbliao/Data/MXB/Detection/0401/cellvit/{slide}/cell_detection/cells.geojson'
-    if os.path.exists(cells_path):
-        new_path = f'/NAS2/Data1/lbliao/Data/MXB/Detection/0401/results/{slide}.geojson'
-        shutil.copy(cells_path, new_path)
+# slides = os.listdir('/NAS2/Data1/lbliao/Data/MXB/Detection/0401/slides')
+# slides = [slide.replace('.svs', '') for slide in slides]
+# for slide in slides:
+#     cells_path = f'/NAS2/Data1/lbliao/Data/MXB/Detection/0401/cellvit/{slide}/cell_detection/cells.geojson'
+#     if os.path.exists(cells_path):
+#         new_path = f'/NAS2/Data1/lbliao/Data/MXB/Detection/0401/results/{slide}.geojson'
+#         shutil.copy(cells_path, new_path)
