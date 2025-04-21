@@ -102,8 +102,11 @@ def get_points_from_txt(file_path):
 
 def get_contours(image):
     # 根据色彩范围，使用 opencv 框出目标
-    lower_bound = np.array([40, 30, 30])
-    upper_bound = np.array([140, 130, 120])
+    # lower_bound = np.array([40, 30, 30])
+    # upper_bound = np.array([140, 130, 120])
+    lower_bound = np.array([50, 50, 50])
+    upper_bound = np.array([110, 150, 180])
+
     image = np.array(image)
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     image = cv2.copyMakeBorder(image, 3, 3, 3, 3, cv2.BORDER_CONSTANT, value=(0, 0, 0))
@@ -124,6 +127,7 @@ class Contouring:
         self.patch_size = opt.patch_size
         self.ihc_ext = opt.ihc_ext
         self.slide_list = opt.slide_list
+        os.makedirs(self.output_dir, exist_ok=True)
 
     def pre_process(self):
         pass
@@ -192,27 +196,27 @@ class GeoContouring(Contouring):
         (a, b, c, d, e, f) = self.get_reg_param(base)
         for cnt, h in zip(coords, hierarchy[0]):
             cnt = np.squeeze(cnt, axis=1)
-            cnt += np.array([w_s -3, h_s -3])
+            cnt += np.array([w_s - 3, h_s - 3])
             cnt = affine_transform(cnt, a, b, c, d, e, f)
             cnt = np.reshape(cnt, (len(cnt) // 2, 1, 2))
             cnt = np.int32(cnt)  # 或者使用 np.float32
             area = cv2.contourArea(cnt)
-            patch_area = (self.patch_size - 1) ** 2
+            patch_area = int(self.patch_size * 0.75) ** 2
             parent_area = cv2.contourArea(coords[h[3]]) if h[3] != -1 else float('inf')
 
             # 存在父contour 且 父contour不为整张图的  且 父contour面积远大于子contour 且 子contour面积很小
-            if patch_area // 100000 < area < patch_area and not (h[3] != -1 and parent_area < patch_area and area < parent_area // 200):
+            if patch_area // 20000 < area < patch_area and not (h[3] != -1 and parent_area < patch_area and area < parent_area // 200):
 
-                # # 轮廓平滑 CV2 的平滑太锐利了
-                # start = 0
-                # while start < len(cnt):
-                #     start_point = cnt[start][0]
-                #     for i, end_point in enumerate(cnt[start + 5: start + 25]):
-                #         end_point = end_point[0]
-                #         if math.sqrt((start_point[0] - end_point[0]) ** 2 + (start_point[1] - end_point[1]) ** 2) < 25:
-                #             cnt = np.vstack((cnt[:start], cnt[start + i + 5:]))
-                #             break
-                #     start += 1
+                # 轮廓平滑 CV2 的平滑太锐利了
+                start = 0
+                while start < len(cnt):
+                    start_point = cnt[start][0]
+                    for i, end_point in enumerate(cnt[start + 5: start + 25]):
+                        end_point = end_point[0]
+                        if math.sqrt((start_point[0] - end_point[0]) ** 2 + (start_point[1] - end_point[1]) ** 2) < 25:
+                            cnt = np.vstack((cnt[:start], cnt[start + i + 5:]))
+                            break
+                    start += 1
 
                 cnt = cnt.reshape((-1, 2))
                 cnt = cnt.tolist()
@@ -253,12 +257,12 @@ class GeoContouring(Contouring):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/vessel', help='patch directory')
-parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/vessel/IHC', help='patch directory')
-parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/vessel/slides', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2//Data1/lbliao/Data/MXB/result/', help='output directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0418/', help='patch directory')
+parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0418/IHC', help='patch directory')
+parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0418/slides', help='patch directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2//Data1/lbliao/Data/MXB/Detection/0418/geojson', help='output directory')
 parser.add_argument('--patch_size', type=int, default=4096, help='patch size')
-parser.add_argument('--ihc_ext', type=str, default='-CD31', help='patch size')
+parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
 parser.add_argument('--slide_list', type=list)  # , default=['202303007A2.kfb'])
 if __name__ == '__main__':
     args = parser.parse_args()
