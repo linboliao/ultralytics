@@ -416,7 +416,7 @@ class YOLO2LM(Annotation):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/nfsdata/duzhicheng/linboliao/Dataset/cellvit/', help='patch directory')
+parser.add_argument('--data_root', type=str, default='0/nfsdata/duzhicheng/linboliao/Dataset/cellvit/', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
