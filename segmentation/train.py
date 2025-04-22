@@ -15,4 +15,5 @@ args = parser.parse_args()
 model = YOLO(args.ckpt)
 
 # Train the model
-results = model.train(data=args.data, epochs=args.epoches, imgsz=args.image_size, device=args.gpu_ids, batch=args.batch, patience=200, lr0=args.lr0)
+results = model.train(data=args.data, epochs=args.epoches, imgsz=args.image_size, device=args.gpu_ids, batch=args.batch,
+                      project=f'/NAS3/lbliao/Code/ultralytics/runs', patience=200, lr0=args.lr0)
