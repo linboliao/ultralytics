@@ -427,7 +427,7 @@ class MultiMagGeo(GeoAnnotation):
         self.val_image_dir = os.path.join(self.output_dir, f'val/images/')
         self.train_label_dir = os.path.join(self.output_dir, f'train/labels/')
         self.val_label_dir = os.path.join(self.output_dir, f'val/labels/')
-
+        os.makedirs(self.label_dir, exist_ok=True)
         os.makedirs(self.train_image_dir, exist_ok=True)
         os.makedirs(self.val_image_dir, exist_ok=True)
 
@@ -464,7 +464,7 @@ class MultiMagGeo(GeoAnnotation):
             for h in range(int(step * 0.25), height - int(step * 0.25), step):
                 img_low = wsi.read_region((w + int(step * 0.125), h + int(step * 0.125)), 0, (int(step * 0.75), int(step * 0.75)))
                 img_mid = wsi.read_region((w, h), 0, (step, step))
-                img_high = wsi.read_region((w - int(step * 0.25), h - int(step * 0.25)), 0, (int(step * 1.5), int(step * 1.5)))
+                img_high = wsi.read_region((w - int(step * 0.125), h - int(step * 0.125)), 0, (int(step * 1.25), int(step * 1.25)))
 
                 if is_background(img_high):
                     continue
@@ -532,8 +532,8 @@ class MultiMagGeo(GeoAnnotation):
                     img_mid = Image.fromarray(img_mid)
                 if isinstance(img_high, np.ndarray):
                     img_high = Image.fromarray(img_high)
-                img_low.save(os.path.join(self.contour_dir, f'{base}_{w}_{h}.png'))
-                self.show_contours(f'{base}_{w}_{h}.png', patch_coords)
+                # img_low.save(os.path.join(self.contour_dir, f'{base}_{w}_{h}.png'))
+                # self.show_contours(f'{base}_{w}_{h}.png', patch_coords)
                 img_low = img_low.resize((self.output_size, self.output_size))
                 img_mid = img_mid.resize((self.output_size, self.output_size))
                 img_high = img_high.resize((self.output_size, self.output_size))
@@ -554,16 +554,16 @@ class MultiMagGeo(GeoAnnotation):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/nfsdata/duzhicheng/linboliao/Dataset/0307/', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0307', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/nfsdata/duzhicheng/linboliao/Dataset/0307/dataset/MultiMag/', help='output directory')
-parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0307/dataset/MultiMag/', help='output directory')
+parser.add_argument('--patch_size', type=int, default=1536, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
-parser.add_argument('--output_size', type=int, default=2048, help='output size')
+parser.add_argument('--output_size', type=int, default=1536, help='output size')
 parser.add_argument('--skip_done', action='store_true', help='skip done')
 parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
