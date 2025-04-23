@@ -720,7 +720,7 @@ class Fusion(nn.Module):
 
     def forward(self, x):
         features = torch.cat(x, dim=1)
-        return self.act(self.bn(self.conv(features)))
+        return self.conv(features)
 
     def forward_fuse(self, low, mid, high):
         """Apply convolution and activation without batch normalization."""
@@ -769,4 +769,4 @@ class MultiMagConv(Conv):
 
         layer_2_features = self.layer_2_fusion([layer_2_low, layer_2_mid, layer_2_high])
         features = torch.cat([layer_1_features, layer_2_features], dim=1)
-        return self.act(self.bn(self.fusion(features)))
+        return self.fusion(features)
