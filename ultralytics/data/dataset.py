@@ -543,6 +543,7 @@ class MultiMagDataset(BaseDataset):
         self.use_obb = task == "obb"
         self.data = data
         assert not (self.use_segments and self.use_keypoints), "Can not use both segments and keypoints."
+        kwargs.update({'augment': False})
         super().__init__(*args, **kwargs)
 
     def cache_labels(self, path=Path("./labels.cache")):
