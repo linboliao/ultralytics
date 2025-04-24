@@ -307,35 +307,40 @@ class LMAnnotation(Annotation):
         base, ext = os.path.splitext(patch)
         ann_path = os.path.join(self.lm_ann_dir, f'{base}.json')
         with open(ann_path, 'r', encoding='utf-8') as file:
-            anns = json.load(file)
+            try:
+                anns = json.load(file)
+            except json.decoder.JSONDecodeError:
+                print(ann_path)
         shapes = anns.get('shapes')
         label_path = os.path.join(self.label_dir, f'{base}.txt')
         with open(label_path, 'w') as f:
             for shape in shapes:
-                if shape.get('label') in ['0']:
+                if shape.get('label') in ['prostate', '电切烧灼腺体', '0', '电切']:
                     clazz = 0
-                elif shape.get('label') in ['1']:
-                    clazz = 1
-                elif shape.get('label') in ['prostate', '电切烧灼腺体']:
-                    clazz = 0
-                elif shape.get('label') in ['cancer']:
+                elif shape.get('label') in ['cancer', '导管内癌', '1', '电切癌']:
                     clazz = 1
                 elif shape.get('label') in ['血管']:
                     clazz = 2
-                elif shape.get('label') in ['神经节']:
+                elif shape.get('label') in ['神经节', '侵犯神经']:
                     clazz = 3
                 elif shape.get('label') in ['鳞状上皮']:
                     clazz = 4
+                else:
+                    print(shape.get('label'))
                 if shape.get('shape_type') == 'polygon':
                     points = shape.get('points')
                     points = [item / self.patch_size for sublist in points for item in sublist]
                 elif shape.get('shape_type') == 'rectangle':
                     points = shape.get('points')
-                    [x1, y1], [x2, y2] = points[0], points[1]
-                    points = [x1 / self.patch_size, y1 / self.patch_size, x1 / self.patch_size, y2 / self.patch_size, x2 / self.patch_size, y2 / self.patch_size, x2 / self.patch_size, y1 / self.patch_size]
-                contours_str = ' '.join(map(str, points))
-                line = f'{clazz} {contours_str}'
-                f.write(line + '\n')
+                    if len(points) == 2:
+                        [x1, y1], [x2, y2] = points[0], points[1]
+                        points = [x1 / self.patch_size, y1 / self.patch_size, x1 / self.patch_size, y2 / self.patch_size, x2 / self.patch_size, y2 / self.patch_size, x2 / self.patch_size, y1 / self.patch_size]
+                    else:
+                        print(patch)
+                if len(points) >= 6:
+                    contours_str = ' '.join(map(str, points))
+                    line = f'{clazz} {contours_str}'
+                    f.write(line + '\n')
         if random.random() < 0.7:
             shutil.copy(os.path.join(self.lm_ann_dir, patch), os.path.join(self.train_image_dir, patch))
             shutil.copy(label_path, os.path.join(self.train_label_dir, f'{base}.txt'))
