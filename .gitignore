@@ -174,4 +174,5 @@ pnnx*
 # calibration image
 calibration_*.npy
 /segmentation/cfg/data/
+/scripts/train.sh
 /segmentation/cfg/data/
