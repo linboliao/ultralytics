@@ -291,11 +291,17 @@ class LMAnnotation(Annotation):
     def __init__(self, opt):
         super().__init__(opt)
         # self.lm_ann_dir = os.path.join(self.output_dir, f'lm_annotations/')
-        self.lm_ann_dir = '/NAS2/Data1/lbliao/Data/MXB/LabelMe/20250224/labelme'
+        self.lm_ann_dir = '/NAS2/Data1/lbliao/Data/MXB/LabelMe/0424'
         self.label_dir = os.path.join(self.output_dir, f'labels/')
-        self.image_dir = os.path.join(self.output_dir, f'images/')
+        self.train_label_dir = os.path.join(self.output_dir, f'train/labels/')
+        self.train_image_dir = os.path.join(self.output_dir, f'train/images/')
+        self.val_label_dir = os.path.join(self.output_dir, f'val/labels/')
+        self.val_image_dir = os.path.join(self.output_dir, f'val/images/')
         os.makedirs(self.label_dir, exist_ok=True)
-        os.makedirs(self.image_dir, exist_ok=True)
+        os.makedirs(self.train_label_dir, exist_ok=True)
+        os.makedirs(self.train_image_dir, exist_ok=True)
+        os.makedirs(self.val_label_dir, exist_ok=True)
+        os.makedirs(self.val_image_dir, exist_ok=True)
 
     def get_contours(self, patch: str):
         base, ext = os.path.splitext(patch)
@@ -306,7 +312,11 @@ class LMAnnotation(Annotation):
         label_path = os.path.join(self.label_dir, f'{base}.txt')
         with open(label_path, 'w') as f:
             for shape in shapes:
-                if shape.get('label') in ['prostate', '电切烧灼腺体']:
+                if shape.get('label') in ['0']:
+                    clazz = 0
+                elif shape.get('label') in ['1']:
+                    clazz = 1
+                elif shape.get('label') in ['prostate', '电切烧灼腺体']:
                     clazz = 0
                 elif shape.get('label') in ['cancer']:
                     clazz = 1
@@ -326,7 +336,12 @@ class LMAnnotation(Annotation):
                 contours_str = ' '.join(map(str, points))
                 line = f'{clazz} {contours_str}'
                 f.write(line + '\n')
-        shutil.copy(os.path.join(self.lm_ann_dir, patch), os.path.join(self.image_dir, patch))
+        if random.random() < 0.7:
+            shutil.copy(os.path.join(self.lm_ann_dir, patch), os.path.join(self.train_image_dir, patch))
+            shutil.copy(label_path, os.path.join(self.train_label_dir, f'{base}.txt'))
+        else:
+            shutil.copy(os.path.join(self.lm_ann_dir, patch), os.path.join(self.val_image_dir, patch))
+            shutil.copy(label_path, os.path.join(self.val_label_dir, f'{base}.txt'))
 
     def run(self, slide: str):
         self.get_contours(slide)
@@ -416,13 +431,13 @@ class YOLO2LM(Annotation):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='0/nfsdata/duzhicheng/linboliao/Dataset/cellvit/', help='patch directory')
+parser.add_argument('--data_root', type=str, default='', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/nfsdata/duzhicheng/linboliao/Dataset/cellvit/', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/0424', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=2048, help='output size')
@@ -431,6 +446,6 @@ parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
-    GeoAnnotation(args).parallel_run()
-    # LMAnnotation(args).parallel_run()
+    # GeoAnnotation(args).parallel_run()
+    LMAnnotation(args).parallel_run()
     # YOLO2LM(args).parallel_run()
