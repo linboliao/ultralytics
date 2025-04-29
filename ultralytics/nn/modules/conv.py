@@ -25,6 +25,8 @@ __all__ = (
     "PConv",
     "DySnakeConv",
     "MultiMagConv",
+    "MultiMagConcat",
+    "Fusion",
 )
 
 
@@ -336,6 +338,22 @@ class Concat(nn.Module):
         return torch.cat(x, self.d)
 
 
+class MultiMagConcat(nn.Module):
+    """Concatenate a list of tensors along dimension."""
+
+    def __init__(self, c1, c2, dimension=1):
+        """Concatenates a list of tensors along a specified dimension."""
+        super().__init__()
+        self.d = dimension
+        self.fusion = Fusion(c1, c1)
+
+    def forward(self, x):
+        """Forward pass for the YOLOv8 mask Proto module."""
+        if x[1].shape[1] // 3 == x[0].shape[1]:
+            x2 = self.fusion(x[1])
+            return torch.cat([x[0], x2], self.d)
+        return torch.cat(x, self.d)
+
 class Index(nn.Module):
     """Returns a particular index of the input."""
 
@@ -367,6 +385,8 @@ class PConv(nn.Module):
         self.cat = Conv(c2, c2, 2, s=1, p=0)
 
     def forward(self, x):
+        if x.shape[1] == 9:
+            x = x[:, 3:6, :, :]
         yw0 = self.cw(self.pad[0](x))
         yw1 = self.cw(self.pad[1](x))
         yh0 = self.ch(self.pad[2](x))
@@ -375,13 +395,13 @@ class PConv(nn.Module):
 
 
 class DySnakeConv(nn.Module):
-    def __init__(self, inc, ouc, k=3, act=True) -> None:
+    def __init__(self, inc, ouc, k=3, s=1, act=True) -> None:
         super().__init__()
 
         self.conv_0 = Conv(inc, ouc, k, act=act)
         self.conv_x = DSConv(inc, ouc, 0, k)
         self.conv_y = DSConv(inc, ouc, 1, k)
-        self.conv_1x1 = Conv(ouc * 3, ouc, 1, 2, act=act)
+        self.conv_1x1 = Conv(ouc * 3, ouc, 1, s, act=act)
 
     def forward(self, x):
         return self.conv_1x1(torch.cat([self.conv_0(x), self.conv_x(x), self.conv_y(x)], dim=1))
@@ -714,13 +734,16 @@ class Fusion(nn.Module):
 
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         super().__init__()
-        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.c1 = c1
+        self.conv = nn.Conv2d(c1 * 3, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2)
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
 
     def forward(self, x):
-        features = torch.cat(x, dim=1)
-        return self.conv(features)
+        if x.shape[1] == self.c1:
+            return x
+        # features = torch.cat(x, dim=1)
+        return self.conv(x)
 
     def forward_fuse(self, low, mid, high):
         """Apply convolution and activation without batch normalization."""
@@ -731,42 +754,54 @@ class Fusion(nn.Module):
 class MultiMagConv(Conv):
     def __init__(self, c1, c2, k=1, s=1):
         super().__init__(c1, c2)
-        self.layer_1_conv = Conv(c1, c2 // 2, k, s)
-        self.layer_1_conv_low = Conv(c1, c2 // 2, k, s)
-        self.layer_1_conv_mid = PConv(c1, c2 // 2, k, s)
-        self.layer_1_conv_high = DySnakeConv(c1, c2 // 2, k)
-        self.layer_1_fusion = nn.Sequential(Fusion(c2 // 2 * 3, c2 // 2), Conv(c2 // 2, c2, 1, s))
-        self.layer_2_conv = Conv(c2 // 2, c2, k, s)
-        self.layer_2_conv_low = Conv(c2 // 2, c2, k, s)
-        self.layer_2_conv_mid = PConv(c2 // 2, c2, k, s)
-        self.layer_2_conv_high = DySnakeConv(c2 // 2, c2, k)
-        self.layer_2_fusion = Fusion(c2 * 3, c2, 1, 1)
+        self.c1 = c1
+        self.low_conv = Conv(c1, c2, k, s)
+        self.mid_conv = PConv(c1, c2, k, s)
+        self.high_conv = DySnakeConv(c1, c2, k, s)
 
         self.pconv = PConv(c1, c2, k, s)
 
-        self.fusion = Conv(c2 * 2, c2, 1, 1)
-
     def forward(self, x):
-        if x.shape[1] < 9:
+        if x.shape[1] == self.c1:
             return self.pconv(x)
-        if x.shape[2] > 1024 and x.shape[2]!=2048:
-            left = (x.shape[2] - 1024) // 2
-            right = x.shape[2] - 1024 - left
-            x = x[:, :, left:-right, :]
-        if x.shape[3] > 1024 and x.shape[3]!=2048:
-            left = (x.shape[3] - 1024) // 2
-            right = x.shape[3] - 1024 - left
-            x = x[:, :, :, left:-right]
-        layer_1_low = self.layer_1_conv(x[:, 0:3, :, :])
-        layer_1_mid = self.layer_1_conv(x[:, 3:6, :, :])
-        layer_1_high = self.layer_1_conv(x[:, 6:9, :, :])
-
-        layer_1_features = self.layer_1_fusion([layer_1_low, layer_1_mid, layer_1_high])
-
-        layer_2_low = self.layer_2_conv(layer_1_low)
-        layer_2_mid = self.layer_2_conv(layer_1_mid)
-        layer_2_high = self.layer_2_conv(layer_1_high)
-
-        layer_2_features = self.layer_2_fusion([layer_2_low, layer_2_mid, layer_2_high])
-        features = torch.cat([layer_1_features, layer_2_features], dim=1)
-        return self.fusion(features)
+        ch = x.shape[1]
+        low = self.low_conv(x[:, 0:ch // 3, :, :])
+        mid = self.mid_conv(x[:, ch // 3:ch // 3 * 2, :, :])
+        high = self.high_conv(x[:, ch // 3 * 2:ch, :, :])
+        return torch.cat([low, mid, high], dim=1)
+    #     self.layer_1_conv = Conv(c1, c2, k, s)
+    #     self.layer_1_conv_low = Conv(c1, c2, k, s)
+    #     self.layer_1_conv_mid = PConv(c1, c2, k, s)
+    #     self.layer_1_conv_high = DySnakeConv(c1, c2 // 2, k)
+    #     self.layer_1_fusion = Fusion(c2 * 3, c2)
+    #     # self.layer_1_conv = Conv(c1, c2 // 2, k, s)
+    #     # self.layer_1_conv_low = Conv(c1, c2 // 2, k, s)
+    #     # self.layer_1_conv_mid = PConv(c1, c2 // 2, k, s)
+    #     # self.layer_1_conv_high = DySnakeConv(c1, c2 // 2, k)
+    #     # self.layer_1_fusion = nn.Sequential(Fusion(c2 // 2 * 3, c2 // 2), Conv(c2 // 2, c2, 1, s))
+    #     self.layer_2_conv = Conv(c2 // 2, c2, k, s)
+    #     self.layer_2_conv_low = Conv(c2 // 2, c2, k, s)
+    #     self.layer_2_conv_mid = PConv(c2 // 2, c2, k, s)
+    #     self.layer_2_conv_high = DySnakeConv(c2 // 2, c2, k)
+    #     self.layer_2_fusion = Fusion(c2 * 3, c2, 1, 1)
+    #
+    #     self.pconv = PConv(c1, c2, k, s)
+    #
+    #     self.fusion = Conv(c2 * 2, c2, 1, 1)
+    #
+    # def forward(self, x):
+    #     if x.shape[1] < 9:
+    #         return self.pconv(x)
+    #     # layer_1_low = self.layer_1_conv(x[:, 0:3, :, :])
+    #     layer_1_mid = self.layer_1_conv(x[:, 3:6, :, :])
+    #     # layer_1_high = self.layer_1_conv(x[:, 6:9, :, :])
+    #     return layer_1_mid
+    #     layer_1_features = self.layer_1_fusion([layer_1_low, layer_1_mid, layer_1_high])
+    #     return layer_1_features
+    #     layer_2_low = self.layer_2_conv(layer_1_low)
+    #     layer_2_mid = self.layer_2_conv(layer_1_mid)
+    #     layer_2_high = self.layer_2_conv(layer_1_high)
+    #
+    #     layer_2_features = self.layer_2_fusion([layer_2_low, layer_2_mid, layer_2_high])
+    #     features = torch.cat([layer_1_features, layer_2_features], dim=1)
+    #     return self.fusion(features)

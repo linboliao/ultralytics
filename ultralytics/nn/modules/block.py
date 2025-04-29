@@ -42,6 +42,7 @@ __all__ = (
     "CBLinear",
     "C3k2",
     "C3k2DSC",
+    "MultiMagC3k2",
     "C2fPSA",
     "C2PSA",
     "RepVGGDW",
@@ -762,6 +763,39 @@ class C3k2(C2f):
         self.m = nn.ModuleList(
             C3k(self.c, self.c, 2, shortcut, g) if c3k else Bottleneck(self.c, self.c, shortcut, g) for _ in range(n)
         )
+
+
+class MultiMagC3k2(C2f):
+    def __init__(self, c1, c2, n=1, c3k=False, e=0.5, g=1, shortcut=True):
+        """Initializes the C3k2 module, a faster CSP Bottleneck with 2 convolutions and optional C3k blocks."""
+        self.c1 = c1
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(
+            C3k(self.c, self.c, 2, shortcut, g) if c3k else Bottleneck(self.c, self.c, shortcut, g) for _ in range(n)
+        )
+
+    def forward(self, x):
+        """Forward pass through C2f layer."""
+        ch = x.shape[1]
+        if ch == self.c1:
+            return super().forward(x)
+        low_y = list(self.cv1(x[:, 0:ch // 3, :, :]).chunk(2, 1))
+        low_y.extend(m(low_y[-1]) for m in self.m)
+        low_y = self.cv2(torch.cat(low_y, 1))
+        mid_y = list(self.cv1(x[:, ch // 3:ch // 3 * 2, :, :]).chunk(2, 1))
+        mid_y.extend(m(mid_y[-1]) for m in self.m)
+        mid_y = self.cv2(torch.cat(mid_y, 1))
+        high_y = list(self.cv1(x[:, ch // 3 * 2:ch, :, :]).chunk(2, 1))
+        high_y.extend(m(high_y[-1]) for m in self.m)
+        high_y = self.cv2(torch.cat(high_y, 1))
+        return torch.cat([low_y, mid_y, high_y], 1)
+
+    def forward_split(self, x):
+        """Forward pass using split() instead of chunk()."""
+        y = self.cv1(x).split((self.c, self.c), 1)
+        y = [y[0], y[1]]
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
 
 
 class C3k(C3):
