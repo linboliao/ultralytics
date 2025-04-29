@@ -44,6 +44,7 @@ from .block import (
     C3Ghost,
     C3k2,
     C3k2DSC,
+    MultiMagC3k2,
     C3x,
     CBFuse,
     CBLinear,
@@ -64,6 +65,7 @@ from .conv import (
     CBAM,
     ChannelAttention,
     Concat,
+    MultiMagConcat,
     Conv,
     Conv2,
     ConvTranspose,
@@ -78,6 +80,7 @@ from .conv import (
     PConv,
     DySnakeConv,
     MultiMagConv,
+    Fusion,
 )
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (
@@ -121,6 +124,7 @@ __all__ = (
     "C3",
     "C2f",
     "C3k2",
+    "MultiMagC3k2",
     "SCDown",
     "C2fPSA",
     "C2PSA",
@@ -169,4 +173,6 @@ __all__ = (
     "PConv",
     "DySnakeConv",
     "MultiMagConv",
+    "MultiMagConcat",
+    "Fusion",
 )

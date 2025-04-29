@@ -39,6 +39,7 @@ from ultralytics.nn.modules import (
     CBLinear,
     Classify,
     Concat,
+    MultiMagConcat,
     Conv,
     Conv2,
     ConvTranspose,
@@ -68,6 +69,8 @@ from ultralytics.nn.modules import (
     PConv,
     DySnakeConv,
     MultiMagConv,
+    MultiMagC3k2,
+    Fusion,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -997,6 +1000,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             PConv,
             DySnakeConv,
             MultiMagConv,
+            MultiMagC3k2,
+            Fusion,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1017,6 +1022,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2fCIB,
             C2PSA,
             A2C2f,
+            MultiMagC3k2,
         }
     )
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
@@ -1066,6 +1072,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
+        elif m is MultiMagConcat:
+            c1, c2 = ch[f[0]], sum(ch[x] for x in f)
         elif m in frozenset({Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}):
             args.append([ch[x] for x in f])
             if m is Segment:
