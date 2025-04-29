@@ -175,4 +175,4 @@ pnnx*
 calibration_*.npy
 /segmentation/cfg/data/
 /segmentation/cfg/data/
-/scripts/train.sh
+/scripts/
