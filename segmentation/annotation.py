@@ -460,11 +460,11 @@ class MultiMagGeo(GeoAnnotation):
             anns = json.load(file)
         features = anns.get('features')
         step = int(self.patch_size * (mpp / 20))
-        for w in range(int(step * 0.25), width - int(step * 0.25), step):
-            for h in range(int(step * 0.25), height - int(step * 0.25), step):
-                img_low = wsi.read_region((w + int(step * 0.125), h + int(step * 0.125)), 0, (int(step * 0.75), int(step * 0.75)))
+        for w in range(int(step * 0.5), width - int(step * 0.5), step):
+            for h in range(int(step * 0.5), height - int(step * 0.5), step):
+                img_low = wsi.read_region((w + int(step * 0.25), h + int(step * 0.25)), 0, (int(step * 0.5), int(step * 0.5)))
                 img_mid = wsi.read_region((w, h), 0, (step, step))
-                img_high = wsi.read_region((w - int(step * 0.125), h - int(step * 0.125)), 0, (int(step * 1.25), int(step * 1.25)))
+                img_high = wsi.read_region((w - int(step * 0.25), h - int(step * 0.25)), 0, (int(step * 1.5), int(step * 1.5)))
 
                 if is_background(img_high):
                     continue
@@ -560,7 +560,7 @@ parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0307/dataset/MultiMag/', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0307/dataset/1536/', help='output directory')
 parser.add_argument('--patch_size', type=int, default=1536, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=1536, help='output size')
