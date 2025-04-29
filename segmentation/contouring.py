@@ -104,9 +104,8 @@ def get_contours(image):
     # 根据色彩范围，使用 opencv 框出目标
     # lower_bound = np.array([40, 30, 30])
     # upper_bound = np.array([140, 130, 120])
-    lower_bound = np.array([50, 50, 50])
-    upper_bound = np.array([110, 150, 180])
-
+    lower_bound = np.array([20, 20, 20])
+    upper_bound = np.array([200, 200, 200])
     image = np.array(image)
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     image = cv2.copyMakeBorder(image, 3, 3, 3, 3, cv2.BORDER_CONSTANT, value=(0, 0, 0))
@@ -205,7 +204,7 @@ class GeoContouring(Contouring):
             parent_area = cv2.contourArea(coords[h[3]]) if h[3] != -1 else float('inf')
 
             # 存在父contour 且 父contour不为整张图的  且 父contour面积远大于子contour 且 子contour面积很小
-            if patch_area // 20000 < area < patch_area and not (h[3] != -1 and parent_area < patch_area and area < parent_area // 200):
+            if patch_area // 20000 < area < patch_area and not (h[3] != -1 and parent_area < patch_area and area < parent_area // 2):
 
                 # 轮廓平滑 CV2 的平滑太锐利了
                 start = 0
@@ -256,14 +255,121 @@ class GeoContouring(Contouring):
                     traceback.print_exc()
 
 
+class KVContouring(GeoContouring):
+    def process(self, slide):
+        base, ext = os.path.splitext(slide)
+        slide_path = os.path.join(self.slide_dir, slide)
+        if ext == '.kfb':
+            wsi = Aslide(slide_path)
+            width, height = wsi.level_dimensions[0]
+        elif ext == '.tif':
+            wsi = Image.open(slide_path)
+            width, height = wsi.size[0], wsi.size[1]
+        else:
+            wsi = openslide.OpenSlide(slide_path)
+            width, height = wsi.level_dimensions[0]
+        step = self.patch_size
+
+        features = []
+        for w_s in range(0, width - step, step):
+            for h_s in range(0, height - step, step):
+                if ext == '.tif':
+                    input_img = wsi.crop((w_s, h_s, w_s + step, h_s + step))
+                else:
+                    input_img = wsi.read_region((w_s, h_s), 0, (self.patch_size, self.patch_size))
+                if is_background(input_img):
+                    continue
+                coords, hierarchy = get_contours(input_img)
+
+                feature = self.post_process((coords, hierarchy, base, w_s, h_s))
+                features.extend(feature)
+
+        path = os.path.join(self.output_dir, f"{base}_kfb/Annotations/")
+        os.makedirs(path, exist_ok=True)
+        output_path = os.path.join(path, f"1.json")
+        with open(output_path, 'w') as f:
+            json.dump(features, f, indent=2)
+        logger.info(f'generated {base}.json contour json!!!')
+
+    def post_process(self, params):
+        coords, hierarchy, base, w_s, h_s = params
+        features = []
+        (a, b, c, d, e, f) = self.get_reg_param(base)
+        for idx, (cnt, h) in enumerate(zip(coords, hierarchy[0])):
+            cnt = np.squeeze(cnt, axis=1)
+            cnt += np.array([w_s - 3, h_s - 3])
+            cnt = affine_transform(cnt, a, b, c, d, e, f)
+            cnt = np.reshape(cnt, (len(cnt) // 2, 1, 2))
+            cnt = np.int32(cnt)  # 或者使用 np.float32
+            area = cv2.contourArea(cnt)
+            patch_area = int(self.patch_size * 0.75) ** 2
+            parent_area = cv2.contourArea(coords[h[3]]) if h[3] != -1 else float('inf')
+
+            # 存在父contour 且 父contour不为整张图的  且 父contour面积远大于子contour 且 子contour面积很小
+            if patch_area // 20000 < area < patch_area and not (h[3] != -1 and parent_area < patch_area and area < parent_area // 200):
+
+                # 轮廓平滑 CV2 的平滑太锐利了
+                start = 0
+                while start < len(cnt):
+                    start_point = cnt[start][0]
+                    for i, end_point in enumerate(cnt[start + 5: start + 25]):
+                        end_point = end_point[0]
+                        if math.sqrt((start_point[0] - end_point[0]) ** 2 + (start_point[1] - end_point[1]) ** 2) < 25:
+                            cnt = np.vstack((cnt[:start], cnt[start + i + 5:]))
+                            break
+                    start += 1
+
+                cnt = cnt.reshape((-1, 2))
+                cnt = cnt.tolist()
+                cnt.append(cnt[0])
+
+                if len(cnt) > 3:
+                    xs = [x for x, y in cnt]
+                    ys = [y for x, y in cnt]
+                    x_min, x_max = min(xs), max(xs)
+                    y_min, y_max = min(ys), max(ys)
+                    features.append({
+                        "points": cnt,
+                        "imageId": 0,
+                        "guid": f"{uuid.uuid4()}",
+                        "name": f"闭合曲线{idx}",
+                        "imageindex": "1",
+                        "isAllShow": False,
+                        "isAlwaysShowDesc": True,
+                        "description": "",
+                        "scale": 0.0388786665223509,
+                        "width": "2",
+                        "type": "CurveRounded",
+                        "fontUnderLine": False,
+                        "fontSize": 11,
+                        "fontFamily": "Microsoft Sans Serif",
+                        "fontItalic": False,
+                        "fontBold": False,
+                        "visible": True,
+                        "color": 4278190335,
+                        "measurement": False,
+                        "radius": 0,
+                        "arcLength": 0,
+                        "angle": 0,
+                        "region": {
+                            "x": x_min,
+                            "y": y_min,
+                            "width": x_max - x_min,
+                            "height": y_max - y_min,
+                        }
+                    })
+        return features
+
+
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0418/', help='patch directory')
-parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0418/IHC', help='patch directory')
-parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0418/slides', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2//Data1/lbliao/Data/MXB/Detection/0418/geojson', help='output directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425', help='patch directory')
+parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/IHC', help='patch directory')
+parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/slides', help='patch directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2//Data1/lbliao/Data/MXB/Detection/0425/geojson', help='output directory')
 parser.add_argument('--patch_size', type=int, default=4096, help='patch size')
-parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
+parser.add_argument('--ihc_ext', type=str, default='-IHC', help='patch size')
 parser.add_argument('--slide_list', type=list)  # , default=['202303007A2.kfb'])
 if __name__ == '__main__':
     args = parser.parse_args()
     GeoContouring(args).parallel_run()
+    # KVContouring(args).parallel_run()
