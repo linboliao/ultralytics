@@ -16,8 +16,8 @@ import openslide
 from PIL import Image
 from loguru import logger
 
-# sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
-# from aslide import Aslide
+sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
+from aslide import Aslide
 
 MIN_AREA = 3000
 
@@ -158,8 +158,8 @@ class GeoAnnotation(Annotation):
             slides = self.slide_list
         else:
             slides = [f for f in os.listdir(self.slide_dir) if os.path.isfile(os.path.join(self.slide_dir, f))]
-        anns = [os.path.splitext(p)[0] for p in os.listdir(self.geo_ann_dir)]
-        slides = [slide for slide in slides if os.path.splitext(slide)[0] in anns]
+        # anns = [os.path.splitext(p)[0] for p in os.listdir(self.geo_ann_dir)]
+        # slides = [slide for slide in slides if os.path.splitext(slide)[0] in anns]
         return slides
 
     def show_contours(self, patch, contours):
@@ -170,6 +170,18 @@ class GeoAnnotation(Annotation):
         image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         save_path = os.path.join(self.contour_dir, patch)
         image.save(save_path)
+
+    def _get_slide_info(self, wsi_path, ext):
+        """统一处理不同格式的幻灯片文件"""
+        if ext == '.kfb':
+            wsi = Aslide(wsi_path)
+            return wsi, *wsi.level_dimensions[0], wsi.mpp
+        elif ext == '.tif':
+            wsi = Image.open(wsi_path)
+            return wsi, *wsi.size, 20.0
+        else:
+            wsi = openslide.OpenSlide(wsi_path)
+            return wsi, *wsi.level_dimensions[0], float(wsi.properties.get('aperio.AppMag', 20))
 
     def get_contours(self, slide):
         wsi_path = os.path.join(self.slide_dir, slide)
@@ -435,14 +447,88 @@ class YOLO2LM(Annotation):
                     traceback.print_exc()
 
 
+class KVAnnotation(GeoAnnotation):
+    def __init__(self, opt):
+        super().__init__(opt)
+        self.label = {4278255615: 0, 4294901760: 1, 4278190080: 2, 4294967040: 3, 4278251008: 5}
+
+    def get_contours(self, slide):
+        wsi_path = os.path.join(self.slide_dir, slide)
+        base, ext = os.path.splitext(slide)
+        logger.info(f'start to process {slide}')
+
+        if ext == '.kfb':
+            wsi = Aslide(wsi_path)
+            width, height = wsi.level_dimensions[0]
+            mpp = wsi.mpp
+        elif ext == '.tif':
+            wsi = Image.open(wsi_path)
+            width, height = wsi.size[0], wsi.size[1]
+            mpp = 20
+        else:
+            wsi = openslide.OpenSlide(wsi_path)
+            width, height = wsi.level_dimensions[0]
+            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
+
+        ann_path = os.path.join(self.geo_ann_dir, f"{slide.replace('.', '_')}/Annotations/1.json")
+        if not os.path.exists(ann_path):
+            logger.info(f'no ann, skip {slide}')
+            return
+        with open(ann_path, 'r', encoding='utf-8') as file:
+            items = json.load(file)
+
+        step = int(self.patch_size * (mpp / 20))
+        for w in range(0, width - step, step):
+            for h in range(0, height - step, step):
+                input_img = wsi.read_region((w, h), 0, (step, step))
+                if is_background(input_img) or (self.skip_done and os.path.isfile(os.path.join(self.image_dir, f'{base}_{w}_{h}.png'))):
+                    continue
+
+                label_path = os.path.join(self.label_dir, f'{base}_{w}_{h}.txt')
+                to_remove = []
+
+                with open(label_path, 'w') as f:
+                    for item in items:
+                        if item.get('type') == 'Rectangle':
+                            region = item.get('region')
+                            _x, _y, _w, _h = region.get('x'), region.get('y'), region.get('width'), region.get('height')
+                            points = [[_x, _y], [_x + _w, _y], [_x + _w, _y + _h], [_x, _y + _h]]
+                        if any(w < a < w + self.patch_size and h < b < h + self.patch_size for (a, b) in points):
+                            for point in points:
+                                c_str = ' '.join(str(num) for num in [_ / self.patch_size for _ in point])
+                            color = item.get('color')
+                            line = f'{self.label[color]} {c_str}'
+                            f.write(line + '\n')
+                        if random.random() < 0.8:
+                            to_remove.append(item)
+
+                    for item in to_remove:
+                        items.remove(item)
+
+                if isinstance(input_img, np.ndarray):
+                    input_img = Image.fromarray(input_img)
+                input_img = input_img.resize((self.output_size, self.output_size))
+
+                if random.random() < 0.7:
+                    image_path = os.path.join(self.train_image_dir, f'{base}_{_w}_{_h}.png')
+                    input_img.save(image_path, quality=95)
+                    shutil.copy(label_path, os.path.join(self.train_label_dir, f'{base}_{_w}_{_h}.txt'))
+                else:
+                    image_path = os.path.join(self.val_image_dir, f'{base}_{_w}_{_h}.png')
+                    input_img.save(image_path, quality=95)
+                    shutil.copy(label_path, os.path.join(self.val_label_dir, f'{base}_{_w}_{_h}.txt'))
+
+                logger.info(f'{base}_{_w}_{_h}.png Annotation generated')
+
+
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/0424', help='output directory')
+parser.add_argument('--output_dir', type=str, default='', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=2048, help='output size')
@@ -452,5 +538,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
     # GeoAnnotation(args).parallel_run()
-    LMAnnotation(args).parallel_run()
+    # LMAnnotation(args).parallel_run()
     # YOLO2LM(args).parallel_run()
+    KVAnnotation(args).parallel_run()
