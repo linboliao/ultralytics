@@ -554,13 +554,13 @@ class MultiMagGeo(GeoAnnotation):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0307', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/nfsdata/duzhicheng/linboliao/Dataset/0307/', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0307/dataset/1536/', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/nfsdata/duzhicheng/linboliao/Dataset/0307/dataset/1536/', help='output directory')
 parser.add_argument('--patch_size', type=int, default=1536, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=1536, help='output size')
