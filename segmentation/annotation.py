@@ -158,8 +158,8 @@ class GeoAnnotation(Annotation):
             slides = self.slide_list
         else:
             slides = [f for f in os.listdir(self.slide_dir) if os.path.isfile(os.path.join(self.slide_dir, f))]
-        # anns = [os.path.splitext(p)[0] for p in os.listdir(self.geo_ann_dir)]
-        # slides = [slide for slide in slides if os.path.splitext(slide)[0] in anns]
+        anns = [os.path.splitext(p)[0] for p in os.listdir(self.geo_ann_dir)]
+        slides = [slide for slide in slides if os.path.splitext(slide)[0] in anns]
         return slides
 
     def show_contours(self, patch, contours):
@@ -245,7 +245,7 @@ class GeoAnnotation(Annotation):
                             elif name == 'Necrosis':
                                 clazz = 2
                             elif name == 'Other':
-                                return
+                                clazz = 3
                             else:
                                 clazz = 1
                             line = f'{clazz} {contours_str}'
@@ -510,19 +510,19 @@ class KVAnnotation(GeoAnnotation):
                 input_img = input_img.resize((self.output_size, self.output_size))
 
                 if random.random() < 0.7:
-                    image_path = os.path.join(self.train_image_dir, f'{base}_{_w}_{_h}.png')
+                    image_path = os.path.join(self.train_image_dir, f'{base}_{w}_{h}.png')
                     input_img.save(image_path, quality=95)
-                    shutil.copy(label_path, os.path.join(self.train_label_dir, f'{base}_{_w}_{_h}.txt'))
+                    shutil.copy(label_path, os.path.join(self.train_label_dir, f'{base}_{w}_{h}.txt'))
                 else:
-                    image_path = os.path.join(self.val_image_dir, f'{base}_{_w}_{_h}.png')
+                    image_path = os.path.join(self.val_image_dir, f'{base}_{w}_{h}.png')
                     input_img.save(image_path, quality=95)
-                    shutil.copy(label_path, os.path.join(self.val_label_dir, f'{base}_{_w}_{_h}.txt'))
+                    shutil.copy(label_path, os.path.join(self.val_label_dir, f'{base}_{w}_{h}.txt'))
 
                 logger.info(f'{base}_{_w}_{_h}.png Annotation generated')
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
@@ -537,7 +537,7 @@ parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
-    # GeoAnnotation(args).parallel_run()
+    GeoAnnotation(args).parallel_run()
     # LMAnnotation(args).parallel_run()
     # YOLO2LM(args).parallel_run()
-    KVAnnotation(args).parallel_run()
+    # KVAnnotation(args).parallel_run()
