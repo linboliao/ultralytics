@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
-from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad, DySnakeConv
+from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -41,7 +41,6 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "C3k2",
-    "C3k2DSC",
     "C2fPSA",
     "C2PSA",
     "RepVGGDW",
@@ -369,25 +368,6 @@ class BottleneckCSP(nn.Module):
         y1 = self.cv3(self.m(self.cv1(x)))
         y2 = self.cv2(x)
         return self.cv4(self.act(self.bn(torch.cat((y1, y2), 1))))
-
-
-class BottleneckDSC(nn.Module):
-    # Standard bottleneck with DCN
-    def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):  # ch_in, ch_out, shortcut-残差连接, groups, kernels, expand
-        super().__init__()
-        c_ = int(c2 * e)  # hidden channels
-        if k[0] == 3:
-            self.cv1 = DySnakeConv(c1, c_, k[0], 1)
-        else:
-            self.cv1 = Conv(c1, c_, k[0], 1)  # self.cv2 = DySnakeConv(c_, c2, 3)
-        if k[1] == 3:
-            self.cv2 = DySnakeConv(c_, c2, k[1])
-        else:
-            self.cv2 = Conv(c_, c2, k[1], 1, g=g)
-        self.add = shortcut and c1 == c2  # 如果残差连接以及通道数等
-
-    def forward(self, x):
-        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
 
 class ResNetBlock(nn.Module):
@@ -740,17 +720,6 @@ class C3f(nn.Module):
         y = [self.cv2(x), self.cv1(x)]
         y.extend(m(y[-1]) for m in self.m)
         return self.cv3(torch.cat(y, 1))
-
-
-class C3k2DSC(C2f):
-    """Faster Implementation of CSP Bottleneck with 2 convolutions."""
-
-    def __init__(self, c1, c2, n=1, c3k=False, e=0.5, g=1, shortcut=True):
-        """Initializes the C3k2 module, a faster CSP Bottleneck with 2 convolutions and optional C3k blocks."""
-        super().__init__(c1, c2, n, shortcut, g, e)
-        self.m = nn.ModuleList(
-            C3k(self.c, self.c, 2, shortcut, g) if c3k else BottleneckDSC(self.c, self.c, shortcut, g) for _ in range(n)
-        )
 
 
 class C3k2(C2f):

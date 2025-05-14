@@ -8,6 +8,8 @@ import sys
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import PIL
 import matplotlib.pyplot as plt
 import cv2
 import h5py
@@ -78,7 +80,7 @@ class Annotation:
         cnt_info = cv2.findContours(dark_region, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         return cnt_info
 
-    def show_contours(self, patch, contours):
+    def show_contours(self, patch, contours, image):
         ihc_path = os.path.join(self.patch_dir, patch)
         ihc_image = cv2.imread(ihc_path)
         cv2.drawContours(ihc_image, contours, -1, (0, 0, 255), 1)
@@ -139,17 +141,21 @@ class GeoAnnotation(Annotation):
         self.label_dir = os.path.join(self.output_dir, f'labels/')
         self.train_label_dir = os.path.join(self.output_dir, f'train/labels/')
         self.val_label_dir = os.path.join(self.output_dir, f'val/labels/')
+        self.test_label_dir = os.path.join(self.output_dir, f'test/labels/')
         self.image_dir = os.path.join(self.output_dir, f'images/')
         self.train_image_dir = os.path.join(self.output_dir, f'train/images/')
         self.val_image_dir = os.path.join(self.output_dir, f'val/images/')
+        self.test_image_dir = os.path.join(self.output_dir, f'test/images/')
 
         self.contour_dir = os.path.join(self.output_dir, f'contours/')
         os.makedirs(self.label_dir, exist_ok=True)
         os.makedirs(self.train_label_dir, exist_ok=True)
         os.makedirs(self.val_label_dir, exist_ok=True)
+        os.makedirs(self.test_label_dir, exist_ok=True)
         os.makedirs(self.image_dir, exist_ok=True)
         os.makedirs(self.train_image_dir, exist_ok=True)
         os.makedirs(self.val_image_dir, exist_ok=True)
+        os.makedirs(self.test_image_dir, exist_ok=True)
         os.makedirs(self.contour_dir, exist_ok=True)
 
     @property
@@ -158,14 +164,16 @@ class GeoAnnotation(Annotation):
             slides = self.slide_list
         else:
             slides = [f for f in os.listdir(self.slide_dir) if os.path.isfile(os.path.join(self.slide_dir, f))]
-        anns = [os.path.splitext(p)[0] for p in os.listdir(self.geo_ann_dir)]
-        slides = [slide for slide in slides if os.path.splitext(slide)[0] in anns]
+        # anns = [os.path.splitext(p)[0] for p in os.listdir(self.geo_ann_dir)]
+        # slides = [slide for slide in slides if os.path.splitext(slide)[0] in anns]
         return slides
 
-    def show_contours(self, patch, contours):
+    def show_contours(self, patch, contours, image):
         image_path = os.path.join(self.contour_dir, patch)
         contours = [np.array(cnt, dtype=np.int32).reshape(-1, 1, 2) for cnt in contours]
-        image = cv2.imread(image_path)
+        # image = cv2.imread(image_path)
+        image = np.array(image)
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         cv2.drawContours(image, contours, -1, (0, 0, 255), 1)
         image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         save_path = os.path.join(self.contour_dir, patch)
@@ -187,6 +195,10 @@ class GeoAnnotation(Annotation):
         wsi_path = os.path.join(self.slide_dir, slide)
         base, ext = os.path.splitext(slide)
         logger.info(f'start to process {slide}')
+        ann_path = os.path.join(self.geo_ann_dir, f"{base}.geojson")
+        if not os.path.exists(ann_path):
+            logger.info(f'no ann, skip {slide}')
+            return
 
         if ext == '.kfb':
             wsi = Aslide(wsi_path)
@@ -200,7 +212,6 @@ class GeoAnnotation(Annotation):
             wsi = openslide.OpenSlide(wsi_path)
             width, height = wsi.level_dimensions[0]
             mpp = int(wsi.properties.get('aperio.AppMag', '20'))
-        ann_path = os.path.join(self.geo_ann_dir, f'{base}.geojson')
         with open(ann_path, 'r', encoding='utf-8') as file:
             anns = json.load(file)
         features = anns.get('features')
@@ -219,6 +230,14 @@ class GeoAnnotation(Annotation):
 
                 def contour(data, _w, _h):
                     lc_coords = []
+                    if len(data) == 5:
+                        result =[]
+                        for i in range(4):
+                            p1 = data[i]
+                            p2 = data[(i + 1) % 4]  # 确保闭合（第四条边连接到第一个点）
+                            segment = interpolate_points(p1, p2, 10)
+                            result.extend(segment)
+                        data = result
                     if any(_w < a < _w + self.patch_size and _h < b < _h + self.patch_size for (a, b) in data):
                         data = [[a - _w, b - _h] for [a, b] in data]
                         patch_coords.append(data)
@@ -240,9 +259,9 @@ class GeoAnnotation(Annotation):
                             color = feature.get('properties', {}).get('classification', {}).get('color', [])
                             if name == 'non-cancer' or name == 'Negative' or color == [0, 255, 0]:
                                 clazz = 0
-                            elif name == 'Region*':
+                            elif name == 'Region*' or color == [255, 0, 0]:
                                 clazz = 1
-                            elif name == 'Necrosis':
+                            elif name == 'Necrosis' or color == [255, 255, 0]:
                                 clazz = 2
                             elif name == 'Other':
                                 clazz = 3
@@ -265,14 +284,14 @@ class GeoAnnotation(Annotation):
                                 for sub_coords in coords:
                                     if isinstance(sub_coords, list):
                                         contour(sub_coords, w, h)
-                    for feature in to_remove:
-                        features.remove(feature)
+                    # for feature in to_remove:
+                    #     features.remove(feature)
 
                 patch = wsi.read_region((w, h), 0, (self.patch_size, self.patch_size))
                 if isinstance(patch, np.ndarray):
                     patch = Image.fromarray(patch)
                 patch.save(os.path.join(self.contour_dir, f'{base}_{w}_{h}.png'))
-                self.show_contours(f'{base}_{w}_{h}.png', patch_coords)
+                self.show_contours(f'{base}_{w}_{h}.png', patch_coords, patch)
                 patch = patch.resize((self.output_size, self.output_size))
 
                 if random.random() < 0.7:
@@ -450,7 +469,7 @@ class YOLO2LM(Annotation):
 class KVAnnotation(GeoAnnotation):
     def __init__(self, opt):
         super().__init__(opt)
-        self.label = {4278255615: 0, 4294901760: 1, 4278190080: 2, 4294967040: 3, 4278251008: 5}
+        self.label = {4278255615: 0, 4294901760: 1, 4278190080: 2, 4294967040: 1, 4278251008: 1}
 
     def get_contours(self, slide):
         wsi_path = os.path.join(self.slide_dir, slide)
@@ -476,10 +495,11 @@ class KVAnnotation(GeoAnnotation):
             return
         with open(ann_path, 'r', encoding='utf-8') as file:
             items = json.load(file)
-
-        step = int(self.patch_size * (mpp / 20))
+        overlap = 0.5
+        step = int(self.patch_size * (mpp / 20) * (1 - overlap))
         for w in range(0, width - step, step):
             for h in range(0, height - step, step):
+                patch_coords = []
                 input_img = wsi.read_region((w, h), 0, (step, step))
                 if is_background(input_img) or (self.skip_done and os.path.isfile(os.path.join(self.image_dir, f'{base}_{w}_{h}.png'))):
                     continue
@@ -491,38 +511,83 @@ class KVAnnotation(GeoAnnotation):
                     for item in items:
                         if item.get('type') == 'Rectangle':
                             region = item.get('region')
-                            _x, _y, _w, _h = region.get('x'), region.get('y'), region.get('width'), region.get('height')
+                            _y, _x, _w, _h = region.get('x'), region.get('y'), region.get('width'), region.get('height')
                             points = [[_x, _y], [_x + _w, _y], [_x + _w, _y + _h], [_x, _y + _h]]
-                        if any(w < a < w + self.patch_size and h < b < h + self.patch_size for (a, b) in points):
-                            for point in points:
-                                c_str = ' '.join(str(num) for num in [_ / self.patch_size for _ in point])
-                            color = item.get('color')
-                            line = f'{self.label[color]} {c_str}'
-                            f.write(line + '\n')
-                        if random.random() < 0.8:
-                            to_remove.append(item)
+                            result = []
 
-                    for item in to_remove:
-                        items.remove(item)
+                            # 遍历四边形的四条边（包含闭合的最后一条边）
+                            for i in range(4):
+                                p1 = points[i]
+                                p2 = points[(i + 1) % 4]  # 确保闭合（第四条边连接到第一个点）
+                                segment = interpolate_points(p1, p2, 10)
+                                result.extend(segment)
+
+                        if any(w < a < w + self.patch_size and h < b < h + self.patch_size for (a, b) in result):
+                            tmp = []
+                            data = [[int(a - w), int(b - h)] for [a, b] in result]
+                            data.append(data[0])
+                            patch_coords.append(data)
+                            for (_a, _b) in result:
+                                tmp.append(max(min((_a - w) / self.patch_size, 1), 0))
+                                tmp.append(max(min((_b - h) / self.patch_size, 1), 0))
+
+                            c_str = ' '.join(map(str, tmp))
+                            color = item.get('color')
+                            line = f'{self.label.get(color, 0)} {c_str}'
+                            f.write(line + '\n')
+
+                    #     if random.random() < 0.2:
+                    #         to_remove.append(item)
+                    #
+                    # for item in to_remove:
+                    #     items.remove(item)
 
                 if isinstance(input_img, np.ndarray):
                     input_img = Image.fromarray(input_img)
                 input_img = input_img.resize((self.output_size, self.output_size))
-
+                self.show_contours(f'{base}_{w}_{h}.png', patch_coords, input_img)
                 if random.random() < 0.7:
                     image_path = os.path.join(self.train_image_dir, f'{base}_{w}_{h}.png')
                     input_img.save(image_path, quality=95)
                     shutil.copy(label_path, os.path.join(self.train_label_dir, f'{base}_{w}_{h}.txt'))
-                else:
+                elif random.random() < 0.5:
                     image_path = os.path.join(self.val_image_dir, f'{base}_{w}_{h}.png')
                     input_img.save(image_path, quality=95)
                     shutil.copy(label_path, os.path.join(self.val_label_dir, f'{base}_{w}_{h}.txt'))
+                else:
+                    image_path = os.path.join(self.test_image_dir, f'{base}_{w}_{h}.png')
+                    input_img.save(image_path, quality=95)
+                    shutil.copy(label_path, os.path.join(self.test_label_dir, f'{base}_{w}_{h}.txt'))
 
                 logger.info(f'{base}_{_w}_{_h}.png Annotation generated')
 
+    @property
+    def slides(self):
+        if self.slide_list:
+            slides = self.slide_list
+        else:
+            slides = [f for f in os.listdir(self.slide_dir) if os.path.isfile(os.path.join(self.slide_dir, f))]
+        return slides
+def interpolate_points(p1, p2, num_insert):
+    """
+    在两点p1和p2之间插入num_insert个等距点
+    :param p1: 起点坐标，格式为[x, y]
+    :param p2: 终点坐标，格式为[x, y]
+    :param num_insert: 插入的中间点数量
+    :return: 包含起点、中间点和终点的列表
+    """
+    dx = (p2[0] - p1[0]) / (num_insert + 1)  # X方向步长
+    dy = (p2[1] - p1[1]) / (num_insert + 1)  # Y方向步长
+    points = [p1]  # 包含起点
+    for i in range(1, num_insert + 1):
+        x = p1[0] + dx * i
+        y = p1[1] + dy * i
+        points.append([x, y])
+    # points.append(p2)  # 添加终点
+    return points
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/测试一/', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')

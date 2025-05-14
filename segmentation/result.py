@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
 import openslide
+import torch
+import torchvision
 from PIL import Image
 from loguru import logger
 
@@ -22,12 +24,10 @@ from aslide import Aslide
 Image.MAX_IMAGE_PIXELS = None
 
 
-def is_background(img, threshold=5):
+def is_background(img, threshold=20):
     img_array = np.array(img)
-    pixel_max = np.max(img_array, axis=2)
-    pixel_min = np.min(img_array, axis=2)
-    difference = pixel_max - pixel_min
-    return np.sum(difference > threshold) < 1000
+    diff = np.ptp(img_array, axis=2)  # ptp直接计算max-min
+    return (diff > threshold).mean() < 0.15
 
 
 class Result:
@@ -35,7 +35,9 @@ class Result:
         self.slide_dir = opt.slide_dir if opt.slide_dir else os.path.join(opt.data_root, f'slides')
         self.slide_list = opt.slide_list
         self.gpu = opt.gpu
-        self.model = YOLO(opt.ckpt)
+        self.models = []
+        for ckpt in opt.ckpt:
+            self.models.append(YOLO(ckpt))
 
         self.patch_size = opt.patch_size
         self.infer_size = opt.infer_size
@@ -45,6 +47,8 @@ class Result:
 
         self.label_dict = {0: 'prostate', 1: 'cancer', 2: 'vessel', 4: 'epithelium', 3: 'ganglion'}
         self.color_dict = {'prostate': [0, 255, 0], 'cancer': [255, 0, 0], 'burn': [0, 0, 255], 'vessel': [255, 255, 0], 'epithelium': [255, 0, 255], 'ganglion': [0, 255, 255]}
+        self.slide = opt.slide if opt.slide else None
+
 
     def infer(self, img, gpu):
         raise NotImplementedError()
@@ -57,6 +61,8 @@ class Result:
     def slides(self):
         if self.slide_list:
             slides = self.slide_list
+        elif self.slide:
+            slides = [self.slide]
         else:
             slides = [f for f in os.listdir(self.slide_dir) if os.path.isfile(os.path.join(self.slide_dir, f))]
         return slides
@@ -101,6 +107,32 @@ class GeoResults(Result):
                 labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
         return coords, labels
 
+    def multi_infer(self, img, gpu):
+        coords = []
+        labels = []
+        confs = []
+        rates = [1,1,0.5]
+        for model, rate in zip(self.models, rates):
+            results = model(img, device=gpu, agnostic_nms=True, iou=0.4)
+            for result in results:
+                boxes = result.boxes
+                for i, box in enumerate(reversed(boxes)):
+                    [x1, y1, x2, y2] = box.xyxy.tolist()[0]
+                    label = self.label_dict[int(box.cls.tolist()[0])]
+                    conf = box.conf.tolist()[0]
+                    coords.append([x1, y1, x2, y2])
+                    labels.append(label)
+                    confs.append(conf * rate)
+        if len(coords) > 0:
+            boxes = torch.tensor(coords, dtype=torch.float32)
+            scores = torch.tensor(confs, dtype=torch.float32)
+
+            i = torchvision.ops.nms(boxes, scores, 0.45)  # NMS
+            index = i.tolist()
+            coords = [coords[i] for i in index if 0 <= i < len(coords)]
+            labels = [labels[i] for i in index if 0 <= i < len(labels)]
+        return coords, labels
+
     def process(self, slide):
         base, ext = os.path.splitext(slide)
         slide_path = os.path.join(self.slide_dir, slide)
@@ -132,7 +164,7 @@ class GeoResults(Result):
                 else:
                     input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
 
-                coords, labels = self.infer(input_img, self.gpu)
+                coords, labels = self.multi_infer(input_img, self.gpu)
                 for (x1, y1, x2, y2) in coords:
                     x1 = int(x1 + w_s)
                     y1 = int(y1 + h_s)

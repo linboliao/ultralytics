@@ -43,7 +43,6 @@ from .block import (
     C2fPSA,
     C3Ghost,
     C3k2,
-    C3k2DSC,
     C3x,
     CBFuse,
     CBLinear,
@@ -76,7 +75,6 @@ from .conv import (
     RepConv,
     SpatialAttention,
     PConv,
-    DySnakeConv,
     MultiMagConv,
 )
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
@@ -92,6 +90,10 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
+
+from .PKI import C2f_PKIBlock,C3k2PKI
+from .DSC import DySnakeConv, C3k2DSC
+from .RCM import RCM, C3k2RCM
 
 __all__ = (
     "Conv",
@@ -167,6 +169,11 @@ __all__ = (
     "Index",
     "A2C2f",
     "PConv",
-    "DySnakeConv",
     "MultiMagConv",
+    "C2f_PKIBlock",
+    "C3k2PKI",
+    "DySnakeConv",
+    "C3k2DSC",
+    "C3k2RCM",
+    "RCM"
 )
