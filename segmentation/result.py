@@ -44,11 +44,11 @@ class Result:
 
         self.output_dir = opt.output_dir if opt.output_dir else os.path.join(opt.data_root, f'results/')
         os.makedirs(os.path.dirname(self.output_dir), exist_ok=True)
+        self.show_level = opt.show_level
 
         self.label_dict = {0: 'prostate', 1: 'cancer', 2: 'vessel', 4: 'epithelium', 3: 'ganglion'}
         self.color_dict = {'prostate': [0, 255, 0], 'cancer': [255, 0, 0], 'burn': [0, 0, 255], 'vessel': [255, 255, 0], 'epithelium': [255, 0, 255], 'ganglion': [0, 255, 255]}
         self.slide = opt.slide if opt.slide else None
-
 
     def infer(self, img, gpu):
         raise NotImplementedError()
@@ -56,6 +56,20 @@ class Result:
     def process(self, data):
         # data: img, slide
         raise NotImplementedError()
+
+    def open_slide(self, slide):
+        base, ext = os.path.splitext(slide)
+        slide_path = os.path.join(self.slide_dir, slide)
+        if ext == '.kfb':
+            wsi = Aslide(slide_path)
+        elif ext == '.tif':
+            wsi = Image.open(slide_path)
+            wsi.level_dimensions = [[wsi.size[0], wsi.size[1]]]
+            wsi.mpp = 20
+        else:
+            wsi = openslide.OpenSlide(slide_path)
+            wsi.mpp = int(wsi.properties.get('aperio.AppMag', '20'))
+        return wsi
 
     @property
     def slides(self):
@@ -111,18 +125,31 @@ class GeoResults(Result):
         coords = []
         labels = []
         confs = []
-        rates = [1,1,0.5]
+        rates = [0.8, 1, 1]
         for model, rate in zip(self.models, rates):
             results = model(img, device=gpu, agnostic_nms=True, iou=0.4)
+            cancer_area = 0
+            remove_list = []
             for result in results:
                 boxes = result.boxes
                 for i, box in enumerate(reversed(boxes)):
                     [x1, y1, x2, y2] = box.xyxy.tolist()[0]
                     label = self.label_dict[int(box.cls.tolist()[0])]
+
                     conf = box.conf.tolist()[0]
                     coords.append([x1, y1, x2, y2])
                     labels.append(label)
                     confs.append(conf * rate)
+                    if label == "cancer":
+                        cancer_area += (x2 - x1) * (y2 - y1)
+                        remove_list.append(i)
+                    if conf < 0.3:
+                        remove_list.append(i)
+
+            if cancer_area < self.infer_size ** 2 * 0.1:
+                coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
+                labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
+                confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
         if len(coords) > 0:
             boxes = torch.tensor(coords, dtype=torch.float32)
             scores = torch.tensor(confs, dtype=torch.float32)
@@ -151,6 +178,7 @@ class GeoResults(Result):
         step = int(self.patch_size * (mpp / 20))
 
         t_coords, t_labels = [], []
+        times = width // wsi.level_dimensions[self.show_level][0]
         for w_s in range(0, width - step, step):
             for h_s in range(0, height - step, step):
                 if ext == '.tif':
@@ -170,7 +198,9 @@ class GeoResults(Result):
                     y1 = int(y1 + h_s)
                     x2 = int(x2 + w_s)
                     y2 = int(y2 + h_s)
-                    t_coords.append([[[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]])
+                    coord = [[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]
+                    coord = [[item // times for item in sublist] for sublist in coord]
+                    t_coords.append([coord])
 
                 t_labels.extend(labels)
         self.post_process(t_coords, t_labels, base)
@@ -209,6 +239,47 @@ class GeoResults(Result):
         with open(output_path, 'w') as f:
             json.dump(geojson, f, indent=2)
         logger.info(f'generated {base}.geojson contour json!!!')
+
+
+class MultiGeoResults(GeoResults):
+    def process(self, slide):
+        wsi = self.open_slide(slide)
+        width, height = wsi.level_dimensions[0]
+        step = int(self.patch_size * (wsi.mpp / 20))
+        times = wsi.level_dimensions[0][0] // wsi.level_dimensions[self.show_level][0]
+        coordinates = [(w, h) for w in range(0, width - step, step)
+                       for h in range(0, height - step, step)]
+
+        t_coords, t_labels = [], []
+
+        def read_region(coord):
+            input_img = wsi.read_region(coord, 0, (step, step))
+            if isinstance(input_img, Image.Image):
+                input_img = input_img.convert('RGB')
+            else:
+                input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
+            if is_background(input_img):
+                return
+            coords, labels = self.multi_infer(input_img, self.gpu)
+            for (x1, y1, x2, y2) in coords:
+                x1 = int(x1 + coord[0])
+                y1 = int(y1 + coord[1])
+                x2 = int(x2 + coord[0])
+                y2 = int(y2 + coord[1])
+                coords = [[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]
+                coords = [[item // times for item in sublist] for sublist in coords]
+                t_coords.append([coords])
+            t_labels.extend(labels)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(read_region, coord) for coord in coordinates]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    traceback.print_exc()
+        base, ext = os.path.splitext(slide)
+        self.post_process(t_coords, t_labels, base)
 
 
 class TiffResults(Result):
