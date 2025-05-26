@@ -164,10 +164,10 @@ class BaseProcessor:
                 scale_factor = tile_info["level"] + 1
                 scaled_detections = []
                 for det in detections:
-                    x1 = det["bbox"][0] * scale_factor + tile_info["x"]
-                    y1 = det["bbox"][1] * scale_factor + tile_info["y"]
-                    x2 = det["bbox"][2] * scale_factor + tile_info["x"]
-                    y2 = det["bbox"][3] * scale_factor + tile_info["y"]
+                    x1 = int(det["bbox"][0] * scale_factor + tile_info["x"])
+                    y1 = int(det["bbox"][1] * scale_factor + tile_info["y"])
+                    x2 = int(det["bbox"][2] * scale_factor + tile_info["x"])
+                    y2 = int(det["bbox"][3] * scale_factor + tile_info["y"])
                     scaled_detections.append({
                         "bbox": [x1, y1, x2, y2],
                         "label": det["label"],
@@ -211,11 +211,11 @@ class GeoJSONProcessor(BaseProcessor):
             4: "epithelium"
         }
         self.color_schema = {
-            "prostate": "#00FF00",  # 绿色
-            "cancer": "#FF0000",  # 红色
-            "vessel": "#FFFF00",  # 黄色
-            "ganglion": "#00FFFF",  # 青色
-            "epithelium": "#FF00FF"  # 品红
+            "prostate": [0, 255, 0],  # 绿色
+            "cancer": [255, 0, 0],  # 红色
+            "vessel": [255, 255, 0],  # 黄色
+            "ganglion": [0, 255, 255],  # 青色
+            "epithelium": [255, 0, 255]  # 品红
         }
         self.infer_params = {  # 模型推理参数
             'agnostic_nms': True,
@@ -237,7 +237,7 @@ class GeoJSONProcessor(BaseProcessor):
         # 第一阶段：辅助模型检测
         for model in self.models[:-1]:
             results = model(tile_img, device=self.config.gpu, agnostic_nms=True, iou=0.4, conf=0.3)
-            _boxes, _labels, _confs  = self._filter_results(results)
+            _boxes, _labels, _confs = self._filter_results(results)
             boxes.extend(_boxes)
             labels.extend(_labels)
             confs.extend(_confs)
@@ -249,7 +249,7 @@ class GeoJSONProcessor(BaseProcessor):
             boxes.extend(_boxes)
             labels.extend(_labels)
             confs.extend(_confs)
-        result = [{"bbox": boxes[i], "label": labels[i], "conf": confs[i]} for i in range(len(labels)) ]
+        result = [{"bbox": boxes[i], "label": labels[i], "conf": confs[i]} for i in range(len(labels))]
         return result
 
     def _filter_results(self, results):
@@ -296,7 +296,7 @@ class GeoJSONProcessor(BaseProcessor):
         for idx, detection in enumerate(results):
             feature = {
                 "type": "Feature",
-                "id": f"{slide_id}_{idx}",
+                "id": uuid.uuid4(),
                 "geometry": {
                     "type": "Polygon",
                     "coordinates": self._bbox_to_polygon(detection['bbox'])
