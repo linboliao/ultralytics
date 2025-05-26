@@ -2,7 +2,9 @@ import gc
 import json
 import os
 import sys
+import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List
 
@@ -71,6 +73,22 @@ class BaseProcessor:
     def _multi_infer(self):
         raise NotImplementedError
 
+    def parallel_process(self):
+        if self.config.slide_list:
+            slide_paths = [Path(self.config.data_root) / slide for slide in self.config.slide_list]
+        elif self.config.slide:
+            slide_paths = [Path(self.config.data_root) / self.config.slide]
+        else:
+            slide_dir = Path(self.config.slide_dir) if self.config.slide_dir else Path(self.config.data_root) / 'slides'
+            slide_paths = [f for f in slide_dir.iterdir() if f.is_file()]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(self.process_slide, slide_path) for slide_path in slide_paths]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    traceback.print_exc()
+
     # 抽象方法由子类实现
     def process_slide(self, slide_path):
         raise NotImplementedError
@@ -84,14 +102,14 @@ class BaseProcessor:
     def _generate_tiles(self, wsi) -> list:
         """生成WSI多分辨率切片坐标（参考网页1、网页6的tile生成策略）"""
         base_level = 0  # 最高分辨率层级
-        tile_size = self.config.tile_size  # 默认512x512
-        overlap = self.config.overlap  # 默认64像素重叠
+        patch_size = self.config.patch_size  # 默认512x512
+        overlap = 0  # 默认64像素重叠 self.config.overlap
 
         # 获取基础层级的全图尺寸
         base_width, base_height = wsi.level_dimensions[base_level]
 
         # 计算有效步长（考虑重叠）
-        step = tile_size - overlap
+        step = patch_size - overlap
 
         # 生成坐标网格
         coords = []
@@ -102,7 +120,7 @@ class BaseProcessor:
                     "x": x,
                     "y": y,
                     "level": base_level,
-                    "size": tile_size,
+                    "size": patch_size,
                     "overlap": overlap
                 })
 
@@ -135,8 +153,8 @@ class BaseProcessor:
                 # 背景过滤
                 if is_background(tile_img):
                     return None
-
-                tile_img = tile_img.convert('RGB')
+                if isinstance(tile_img, Image.Image):
+                    tile_img = tile_img.convert('RGB')
 
                 # 执行推理
                 with torch.no_grad():
@@ -157,7 +175,7 @@ class BaseProcessor:
                     })
                 return scaled_detections
             except Exception as e:
-                logger.error(f"处理切片失败: {str(e)}")
+                traceback.print_exc()
                 return None
 
         # 分批处理机制
@@ -214,35 +232,50 @@ class GeoJSONProcessor(BaseProcessor):
 
     def _process_tile(self, tile_img: np.ndarray) -> list:
         """处理单个图像块的多模型协同推理"""
-        merged_results = []
+        boxes, labels, confs = [], [], []
 
         # 第一阶段：辅助模型检测
         for model in self.models[:-1]:
-            results = model(tile_img, **self.infer_params)
-            merged_results.extend(self._filter_results(results))
+            results = model(tile_img, device=self.config.gpu, agnostic_nms=True, iou=0.4, conf=0.3)
+            _boxes, _labels, _confs  = self._filter_results(results)
+            boxes.extend(_boxes)
+            labels.extend(_labels)
+            confs.extend(_confs)
 
         # 第二阶段：主模型精细检测
-        final_results = self.models[-1](tile_img, **self.infer_params)
-        return self._merge_results(merged_results, final_results)
+        final_results = self.models[-1](tile_img, device=self.config.gpu, agnostic_nms=True, iou=0.2, conf=0.3)
+        _boxes, _labels, _confs = self._filter_results(final_results)
+        if len(final_results) >= 3:
+            boxes.extend(_boxes)
+            labels.extend(_labels)
+            confs.extend(_confs)
+        result = [{"bbox": boxes[i], "label": labels[i], "conf": confs[i]} for i in range(len(labels)) ]
+        return result
 
-    def _filter_results(self, results) -> list:
+    def _filter_results(self, results):
         """过滤并标准化检测结果"""
-        filtered = []
+        coords, labels, confs = [], [], []
+        cancer_area = 0
+        remove_list = []
         for result in results:
-            boxes = result.boxes.xyxy.cpu().numpy()
-            confs = result.boxes.conf.cpu().numpy()
-            labels = result.boxes.cls.cpu().numpy().astype(int)
+            boxes = result.boxes
+            for i, box in enumerate(reversed(boxes)):
+                [x1, y1, x2, y2] = box.xyxy.tolist()[0]
+                label = self.label_map.get(int(box.cls.tolist()[0]), "unknown")
+                conf = box.conf.tolist()[0]
+                coords.append([x1, y1, x2, y2])
+                labels.append(label)
+                confs.append(conf)
 
-            for i in range(len(boxes)):
-                label = self.label_map.get(labels[i], "unknown")
-                if confs[i] < self.infer_params['conf']:
-                    continue
-                filtered.append({
-                    "bbox": boxes[i].tolist(),
-                    "label": label,
-                    "conf": float(confs[i])
-                })
-        return filtered
+                if label == "cancer":
+                    cancer_area += (x2 - x1) * (y2 - y1)
+                    remove_list.append(i)
+
+        if cancer_area < self.config.patch_size ** 2 * 0.1:
+            coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
+            labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
+            confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
+        return coords, labels, confs
 
     @staticmethod
     def _merge_results(initial, final) -> list:

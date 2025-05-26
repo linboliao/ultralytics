@@ -1,10 +1,11 @@
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
 import argparse
 
 from segmentation.result import *
+from segmentation.new_result import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--ckpt', type=list, default=['/data2/lbliao/Code/ultralytics/runs/detect/Pconv/weights/best.pt', '/data2/lbliao/Code/ultralytics/runs/detect/2048-1536-2/weights/best.pt', '/data2/lbliao/Code/ultralytics/runs/detect/yolov11/weights/best.pt','/data2/lbliao/Code/ultralytics/runs/detect/cbam/weights/best.pt', '/data2/lbliao/Code/ultralytics/runs/detect/train5/weights/best.pt'])
@@ -23,7 +24,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     # GeoResults(args).parallel_run()
-    MultiGeoResults(args).parallel_run()
+    # MultiGeoResults(args).parallel_run()
+
+
+    GeoJSONProcessor(args).parallel_process()
     # TiffResults(args).parallel_run()
     # PicResults(args).parallel_run()
     # MdsResults(args).parallel_run()
