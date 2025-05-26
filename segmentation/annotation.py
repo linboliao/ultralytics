@@ -398,7 +398,7 @@ class YOLO2LM(Annotation):
     def __init__(self, opt):
         super().__init__(opt)
         self.data_root = opt.data_root
-        self.lm_ann_dir = os.path.join(self.data_root, f'lms/')
+        self.lm_ann_dir = os.path.join(self.data_root, f'lms-cell/')
         self.label_dir = os.path.join(self.data_root, f'labels/')
         self.image_dir = os.path.join(self.data_root, f'images/')
         os.makedirs(self.lm_ann_dir, exist_ok=True)
@@ -412,7 +412,10 @@ class YOLO2LM(Annotation):
             lines = f.readlines()
 
         new_lines = []
-        shapes = []
+        with open(os.path.join(self.lm_ann_dir, f'{base}.json'), 'r', encoding='utf-8') as file:
+            lm = json.load(file)
+        shapes = lm.get('shapes')
+        # shapes = []
         for line in lines:
             stripped_line = line.strip()
             if not stripped_line:
@@ -442,12 +445,12 @@ class YOLO2LM(Annotation):
             "version": "5.6.0",
             "flags": {},
             "shapes": shapes,
-            "imagePath": f"{base}.jpg",
+            "imagePath": patch,
             "imageData": None,
             "imageHeight": self.patch_size,
             "imageWidth": self.patch_size,
         }
-        with open(os.path.join(self.lm_ann_dir, f'{base}.json'), 'w') as f:
+        with open(os.path.join(self.lm_ann_dir, f'{base}.json'), 'w', encoding='utf-8') as f:
             json.dump(ann, f, indent=2)
         logger.info(f'process {base}.jpg')
 
@@ -587,7 +590,7 @@ def interpolate_points(p1, p2, num_insert):
     return points
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/测试一/', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/2048', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
@@ -602,7 +605,7 @@ parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
-    GeoAnnotation(args).parallel_run()
+    # GeoAnnotation(args).parallel_run()
     # LMAnnotation(args).parallel_run()
-    # YOLO2LM(args).parallel_run()
+    YOLO2LM(args).parallel_run()
     # KVAnnotation(args).parallel_run()

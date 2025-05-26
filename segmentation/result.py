@@ -86,7 +86,7 @@ class Result:
             self.process(slide)
 
     def parallel_run(self):
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(self.process, slide) for slide in self.slides]
             for future in as_completed(futures):
                 try:
@@ -101,9 +101,10 @@ class GeoResults(Result):
 
     def infer(self, img, gpu):
         # img : str or path or PIL.Image or np.ndarray：BGR
-        results = self.model(img, device=gpu, agnostic_nms=True, iou=0.4)
+        results = self.models[0](img, device=gpu, agnostic_nms=True, iou=0.4)
         coords = []
         labels = []
+        confs = []
         for result in results:
             boxes = result.boxes
             cancer_area = 0
@@ -114,19 +115,20 @@ class GeoResults(Result):
                 if label == "cancer":
                     cancer_area += (x2 - x1) * (y2 - y1)
                     remove_list.append(i)
+                conf = box.conf.tolist()[0]
+
                 coords.append([x1, y1, x2, y2])
                 labels.append(label)
+                confs.append(conf)
             if cancer_area < self.infer_size ** 2 * 0.1:
                 coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
                 labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
-        return coords, labels
+                confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
+        return coords, labels, confs
 
     def multi_infer(self, img, gpu):
-        coords = []
-        labels = []
-        confs = []
-        rates = [0.8, 1, 1]
-        for model, rate in zip(self.models, rates):
+        coords, labels, confs = [], [], []
+        for model in self.models[:-1]:
             results = model(img, device=gpu, agnostic_nms=True, iou=0.4)
             cancer_area = 0
             remove_list = []
@@ -135,30 +137,71 @@ class GeoResults(Result):
                 for i, box in enumerate(reversed(boxes)):
                     [x1, y1, x2, y2] = box.xyxy.tolist()[0]
                     label = self.label_dict[int(box.cls.tolist()[0])]
-
                     conf = box.conf.tolist()[0]
+
                     coords.append([x1, y1, x2, y2])
                     labels.append(label)
-                    confs.append(conf * rate)
+                    confs.append(conf)
                     if label == "cancer":
                         cancer_area += (x2 - x1) * (y2 - y1)
-                        remove_list.append(i)
-                    if conf < 0.3:
                         remove_list.append(i)
 
             if cancer_area < self.infer_size ** 2 * 0.1:
                 coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
                 labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
                 confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
+
         if len(coords) > 0:
             boxes = torch.tensor(coords, dtype=torch.float32)
             scores = torch.tensor(confs, dtype=torch.float32)
 
-            i = torchvision.ops.nms(boxes, scores, 0.45)  # NMS
+            i = torchvision.ops.nms(boxes, scores, 0.5)  # NMS
             index = i.tolist()
             coords = [coords[i] for i in index if 0 <= i < len(coords)]
             labels = [labels[i] for i in index if 0 <= i < len(labels)]
-        return coords, labels
+            confs = [confs[i] for i in index if 0 <= i < len(confs)]
+        results = self.models[-1](img, device=gpu, agnostic_nms=True)
+        cancer_area = 0
+        remove_list = []
+        length = len(coords)
+        for result in results:
+            boxes = result.boxes
+            for i, box in enumerate(reversed(boxes)):
+                [x1, y1, x2, y2] = box.xyxy.tolist()[0]
+                label = self.label_dict[int(box.cls.tolist()[0])]
+                conf = box.conf.tolist()[0]
+                if conf < 0.3:
+                    continue
+                coords.append([x1, y1, x2, y2])
+                labels.append(label)
+                confs.append(conf * 0.1)
+                if label == "cancer":
+                    cancer_area += (x2 - x1) * (y2 - y1)
+                    remove_list.append(i + length)
+
+        if cancer_area < self.patch_size ** 2 * 0.2:
+            coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
+            labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
+            confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
+        if len(coords) > 0:
+            boxes = torch.tensor(coords, dtype=torch.float32)
+            scores = torch.tensor(confs, dtype=torch.float32)
+
+            i = torchvision.ops.nms(boxes, scores, 0.05)  # NMS
+            index = i.tolist()
+            coords = [coords[i] for i in index if 0 <= i < len(coords)]
+            labels = [labels[i] for i in index if 0 <= i < len(labels)]
+            confs = [confs[i] for i in index if 0 <= i < len(confs)]
+            idxs = [i for i, label in enumerate(labels) if label == 'cancer']
+            area = 0
+            for idx in idxs:
+                [x1,y1, x2,y2] = coords[idx]
+                area += (x2 - x1) * (y2 - y1)
+            if area < self.patch_size ** 2 * 0.17 or len(idxs) < 3:
+                coords = [coords[i] for i in range(len(coords)) if i not in idxs]
+                labels = [labels[i] for i in range(len(labels)) if i not in idxs]
+                confs = [confs[i] for i in range(len(confs)) if i not in idxs]
+        return coords, labels, confs
 
     def process(self, slide):
         base, ext = os.path.splitext(slide)
@@ -177,7 +220,7 @@ class GeoResults(Result):
             mpp = int(wsi.properties.get('aperio.AppMag', '20'))
         step = int(self.patch_size * (mpp / 20))
 
-        t_coords, t_labels = [], []
+        t_coords, t_labels, t_confs = [], [], []
         times = width // wsi.level_dimensions[self.show_level][0]
         for w_s in range(0, width - step, step):
             for h_s in range(0, height - step, step):
@@ -192,7 +235,8 @@ class GeoResults(Result):
                 else:
                     input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
 
-                coords, labels = self.multi_infer(input_img, self.gpu)
+                # coords, labels, confs = self.multi_infer(input_img, self.gpu)
+                coords, labels, confs = self.infer(input_img, self.gpu)
                 for (x1, y1, x2, y2) in coords:
                     x1 = int(x1 + w_s)
                     y1 = int(y1 + h_s)
@@ -201,11 +245,11 @@ class GeoResults(Result):
                     coord = [[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]
                     coord = [[item // times for item in sublist] for sublist in coord]
                     t_coords.append([coord])
-
+                t_confs.extend(confs)
                 t_labels.extend(labels)
-        self.post_process(t_coords, t_labels, base)
+        self.post_process(t_coords, t_labels, t_confs, base)
 
-    def post_process(self, coords, labels, base):
+    def post_process(self, coords, labels, confs, base):
         feature_template = {
             "type": "Feature",
             "geometry": {"type": "Polygon", "coordinates": None},
@@ -240,6 +284,19 @@ class GeoResults(Result):
             json.dump(geojson, f, indent=2)
         logger.info(f'generated {base}.geojson contour json!!!')
 
+        indexed_confs = list(enumerate(confs))
+
+        # 按值降序排序（确保稳定性）
+        sorted_pairs = sorted(indexed_confs, key=lambda x: x[1], reverse=True)
+
+        # 提取前50名的索引
+        top50_indices = [idx for idx, val in sorted_pairs[:min(50, len(sorted_pairs))]]
+        selected_coords = [coords[i] for i in top50_indices]
+        selected_coords = [coord[0][:4] for coord in selected_coords]
+        output_path = os.path.join(self.output_dir, f"{base}.json")
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(selected_coords, f, indent=4)  # 缩进4空格美化格式
+
 
 class MultiGeoResults(GeoResults):
     def process(self, slide):
@@ -250,7 +307,7 @@ class MultiGeoResults(GeoResults):
         coordinates = [(w, h) for w in range(0, width - step, step)
                        for h in range(0, height - step, step)]
 
-        t_coords, t_labels = [], []
+        t_coords, t_labels, t_confs = [], [], []
 
         def read_region(coord):
             input_img = wsi.read_region(coord, 0, (step, step))
@@ -260,7 +317,7 @@ class MultiGeoResults(GeoResults):
                 input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
             if is_background(input_img):
                 return
-            coords, labels = self.multi_infer(input_img, self.gpu)
+            coords, labels, confs = self.multi_infer(input_img, self.gpu)
             for (x1, y1, x2, y2) in coords:
                 x1 = int(x1 + coord[0])
                 y1 = int(y1 + coord[1])
@@ -269,9 +326,10 @@ class MultiGeoResults(GeoResults):
                 coords = [[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]
                 coords = [[item // times for item in sublist] for sublist in coords]
                 t_coords.append([coords])
+            t_confs.extend(confs)
             t_labels.extend(labels)
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(read_region, coord) for coord in coordinates]
             for future in as_completed(futures):
                 try:
@@ -279,7 +337,7 @@ class MultiGeoResults(GeoResults):
                 except Exception:
                     traceback.print_exc()
         base, ext = os.path.splitext(slide)
-        self.post_process(t_coords, t_labels, base)
+        self.post_process(t_coords, t_labels, t_confs, base)
 
 
 class TiffResults(Result):
@@ -288,7 +346,7 @@ class TiffResults(Result):
 
     def infer(self, img, gpu):
         # img : str or path or PIL.Image or np.ndarray：BGR
-        results = self.model(img, device=gpu, agnostic_nms=True, iou=0.4)
+        results = self.models[0](img, device=gpu, agnostic_nms=True, iou=0.4)
         if isinstance(results[0], Results):
             return results[0].plot()
         else:
@@ -572,3 +630,51 @@ class LMResults(Result):
                 with open(os.path.join(self.output_dir, f'{base}_{w_s}_{h_s}.json'), 'w') as f:
                     json.dump(ann, f, indent=2)
                 logger.info(f'process {base}_{w_s}_{h_s}.jpg')
+
+
+class PicResults(Result):
+    def __init__(self, opt):
+        super().__init__(opt)
+        self.label_dir = os.path.join(opt.data_root, f'lms-cell/')
+        self.image_dir = os.path.join(opt.data_root, f'images/')
+        os.makedirs(self.label_dir, exist_ok=True)
+
+    @property
+    def slides(self):
+        return os.listdir(self.image_dir)
+
+    def process(self, img):
+        img_path = os.path.join(self.image_dir, img)
+        input_img = cv2.imread(img_path)
+        results = self.models[0](input_img, device=self.gpu)
+        shapes = []
+        for result in results:
+            boxes = result.boxes  # Boxes object for bounding box outputs
+            for i, box in enumerate(reversed(boxes)):
+                [x1, y1, x2, y2] = box.xyxy.tolist()[0]
+                points = [[x1, y1], [x2, y2]]
+                label = self.label_dict[int(box.cls.tolist()[0])]
+                if label != 'vessel':
+                    continue
+                shapes.append({
+                    "label": label,
+                    "points": points,
+                    "group_id": None,
+                    "description": "",
+                    "shape_type": "rectangle",
+                    "flags": {},
+                    "mask": None
+                })
+        ann = {
+            "version": "5.6.0",
+            "flags": {},
+            "shapes": shapes,
+            "imagePath": img,
+            "imageData": None,
+            "imageHeight": self.patch_size,
+            "imageWidth": self.patch_size,
+        }
+        base, _ = os.path.splitext(img)
+        with open(os.path.join(self.label_dir, f'{base}.json'), 'w', encoding='utf-8') as f:
+            json.dump(ann, f, indent=2)
+        logger.info(f'process {base}.jpg')
