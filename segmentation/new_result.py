@@ -296,7 +296,7 @@ class GeoJSONProcessor(BaseProcessor):
         for idx, detection in enumerate(results):
             feature = {
                 "type": "Feature",
-                "id": uuid.uuid4(),
+                "id":  str(uuid.uuid4()),
                 "geometry": {
                     "type": "Polygon",
                     "coordinates": self._bbox_to_polygon(detection['bbox'])
