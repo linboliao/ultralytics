@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import shutil
@@ -142,24 +143,27 @@ class GeoResults(Result):
                     coords.append([x1, y1, x2, y2])
                     labels.append(label)
                     confs.append(conf)
-                    if label == "cancer":
-                        cancer_area += (x2 - x1) * (y2 - y1)
-                        remove_list.append(i)
+            #         if label == "cancer":
+            #             cancer_area += (x2 - x1) * (y2 - y1)
+            #             remove_list.append(i)
+            #
+            # if cancer_area < self.infer_size ** 2 * 0.1:
+            #     coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
+            #     labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
+            #     confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
 
-            if cancer_area < self.infer_size ** 2 * 0.1:
-                coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
-                labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
-                confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
-
-        if len(coords) > 0:
-            boxes = torch.tensor(coords, dtype=torch.float32)
-            scores = torch.tensor(confs, dtype=torch.float32)
-
-            i = torchvision.ops.nms(boxes, scores, 0.5)  # NMS
-            index = i.tolist()
-            coords = [coords[i] for i in index if 0 <= i < len(coords)]
-            labels = [labels[i] for i in index if 0 <= i < len(labels)]
-            confs = [confs[i] for i in index if 0 <= i < len(confs)]
+        # if len(coords) > 0:
+        #     boxes = torch.tensor(coords, dtype=torch.float32)
+        #     scores = torch.tensor(confs, dtype=torch.float32)
+        #
+        #     i = torchvision.ops.nms(boxes, scores, 0.5)  # NMS
+        #     index = i.tolist()
+        #     coords = [coords[i] for i in index if 0 <= i < len(coords)]
+        #     labels = [labels[i] for i in index if 0 <= i < len(labels)]
+        #     confs = [confs[i] for i in index if 0 <= i < len(confs)]
+        old_coords = copy.copy(coords)
+        old_labels = copy.copy(labels)
+        old_confs = copy.copy(confs)
         results = self.models[-1](img, device=gpu, agnostic_nms=True)
         cancer_area = 0
         remove_list = []
@@ -175,19 +179,19 @@ class GeoResults(Result):
                 coords.append([x1, y1, x2, y2])
                 labels.append(label)
                 confs.append(conf * 0.1)
-                if label == "cancer":
-                    cancer_area += (x2 - x1) * (y2 - y1)
-                    remove_list.append(i + length)
-
-        if cancer_area < self.patch_size ** 2 * 0.2:
-            coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
-            labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
-            confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
+        #         if label == "cancer":
+        #             cancer_area += (x2 - x1) * (y2 - y1)
+        #             remove_list.append(i + length)
+        #
+        # if cancer_area < self.patch_size ** 2 * 0.2:
+        #     coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
+        #     labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
+        #     confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
         if len(coords) > 0:
             boxes = torch.tensor(coords, dtype=torch.float32)
             scores = torch.tensor(confs, dtype=torch.float32)
 
-            i = torchvision.ops.nms(boxes, scores, 0.05)  # NMS
+            i = torchvision.ops.nms(boxes, scores, 0.5)  # NMS
             index = i.tolist()
             coords = [coords[i] for i in index if 0 <= i < len(coords)]
             labels = [labels[i] for i in index if 0 <= i < len(labels)]
@@ -197,10 +201,30 @@ class GeoResults(Result):
             for idx in idxs:
                 [x1,y1, x2,y2] = coords[idx]
                 area += (x2 - x1) * (y2 - y1)
-            if area < self.patch_size ** 2 * 0.17 or len(idxs) < 3:
+            if area < self.patch_size ** 2 * 0.2 or len(idxs) < 4:
                 coords = [coords[i] for i in range(len(coords)) if i not in idxs]
                 labels = [labels[i] for i in range(len(labels)) if i not in idxs]
                 confs = [confs[i] for i in range(len(confs)) if i not in idxs]
+            old_coords.extend(coords)
+            old_labels.extend(labels)
+            old_confs.extend(confs)
+            boxes = torch.tensor(old_coords, dtype=torch.float32)
+            scores = torch.tensor(old_confs, dtype=torch.float32)
+            i = torchvision.ops.nms(boxes, scores, 0.3)
+            index = i.tolist()
+            coords = [old_coords[i] for i in index if 0 <= i < len(old_coords)]
+            labels = [old_labels[i] for i in index if 0 <= i < len(old_coords)]
+            confs = [old_confs[i] for i in index if 0 <= i < len(old_coords)]
+            idxs = [i for i, label in enumerate(labels) if label == 'cancer']
+            area = 0
+            for idx in idxs:
+                [x1,y1, x2,y2] = coords[idx]
+                area += (x2 - x1) * (y2 - y1)
+            if area < self.patch_size ** 2 * 0.03 or len(idxs) == 1:
+                coords = [coords[i] for i in range(len(coords)) if i not in idxs]
+                labels = [labels[i] for i in range(len(labels)) if i not in idxs]
+                confs = [confs[i] for i in range(len(confs)) if i not in idxs]
+
         return coords, labels, confs
 
     def process(self, slide):
