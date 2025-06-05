@@ -1,7 +1,6 @@
 import gc
 import json
 import os
-import sys
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,46 +8,17 @@ from pathlib import Path
 from typing import List
 
 import numpy as np
-import openslide
 import torch
 import torchvision
 from PIL import Image
 from loguru import logger
 
+from segmentation.wsi import WSIOperator
 from ultralytics import YOLO
-
-sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
-from aslide import Aslide
-
-sys.path.insert(1, r'/data2/lbliao/Code/opensdpc/')
-from opensdpc.opensdpc import OpenSdpc
 
 Image.MAX_IMAGE_PIXELS = None
 
 
-def is_background(img, threshold=20):
-    img_array = np.array(img)
-    diff = np.ptp(img_array, axis=2)  # ptp直接计算max-min
-    return (diff > threshold).mean() < 0.15
-
-
-class WSIOperator:
-    @staticmethod
-    def open_slide(path: Path):
-        """统一WSI打开接口"""
-        suffix = path.suffix.lower()
-        if suffix == '.kfb':
-            slide = Aslide(str(path))
-        elif suffix == '.sdpc':
-            slide = OpenSdpc(str(path))
-        else:
-            slide = openslide.OpenSlide(str(path))
-        return slide
-
-    @staticmethod
-    def read_region(slide, location, level, size):
-        """统一区域读取接口"""
-        return slide.read_region(location, level, size)
 
 
 class BaseProcessor:
@@ -143,16 +113,15 @@ class BaseProcessor:
         def process_single_tile(tile_info):
             try:
                 # 读取图像区域
-                tile_img = WSIOperator.read_region(
-                    wsi,
+                tile_img = wsi.read_region(
                     (tile_info["x"], tile_info["y"]),
                     tile_info["level"],
-                    (tile_info["size"], tile_info["size"])
+                    (tile_info["size"], tile_info["size"]),
+                    check_background=True
                 )
-
-                # 背景过滤
-                if is_background(tile_img):
+                if not tile_img:
                     return None
+
                 if isinstance(tile_img, Image.Image):
                     tile_img = tile_img.convert('RGB')
 
@@ -225,7 +194,7 @@ class GeoJSONProcessor(BaseProcessor):
 
     def process_slide(self, slide_path: Path):
         """处理整张病理切片的主流程"""
-        wsi = WSIOperator.open_slide(slide_path)
+        wsi = WSIOperator(slide_path)
         tile_coords = self._generate_tiles(wsi)
         results = self._parallel_process(wsi, tile_coords)
         self._save_results(results, slide_path.stem)

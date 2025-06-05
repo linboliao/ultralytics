@@ -131,8 +131,6 @@ class GeoResults(Result):
         coords, labels, confs = [], [], []
         for model in self.models[:-1]:
             results = model(img, device=gpu, agnostic_nms=True, iou=0.4)
-            cancer_area = 0
-            remove_list = []
             for result in results:
                 boxes = result.boxes
                 for i, box in enumerate(reversed(boxes)):
@@ -143,31 +141,12 @@ class GeoResults(Result):
                     coords.append([x1, y1, x2, y2])
                     labels.append(label)
                     confs.append(conf)
-            #         if label == "cancer":
-            #             cancer_area += (x2 - x1) * (y2 - y1)
-            #             remove_list.append(i)
-            #
-            # if cancer_area < self.infer_size ** 2 * 0.1:
-            #     coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
-            #     labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
-            #     confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
 
-        # if len(coords) > 0:
-        #     boxes = torch.tensor(coords, dtype=torch.float32)
-        #     scores = torch.tensor(confs, dtype=torch.float32)
-        #
-        #     i = torchvision.ops.nms(boxes, scores, 0.5)  # NMS
-        #     index = i.tolist()
-        #     coords = [coords[i] for i in index if 0 <= i < len(coords)]
-        #     labels = [labels[i] for i in index if 0 <= i < len(labels)]
-        #     confs = [confs[i] for i in index if 0 <= i < len(confs)]
         old_coords = copy.copy(coords)
         old_labels = copy.copy(labels)
         old_confs = copy.copy(confs)
         results = self.models[-1](img, device=gpu, agnostic_nms=True)
-        cancer_area = 0
-        remove_list = []
-        length = len(coords)
+
         for result in results:
             boxes = result.boxes
             for i, box in enumerate(reversed(boxes)):
@@ -179,19 +158,12 @@ class GeoResults(Result):
                 coords.append([x1, y1, x2, y2])
                 labels.append(label)
                 confs.append(conf * 0.1)
-        #         if label == "cancer":
-        #             cancer_area += (x2 - x1) * (y2 - y1)
-        #             remove_list.append(i + length)
-        #
-        # if cancer_area < self.patch_size ** 2 * 0.2:
-        #     coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
-        #     labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
-        #     confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
+
         if len(coords) > 0:
             boxes = torch.tensor(coords, dtype=torch.float32)
             scores = torch.tensor(confs, dtype=torch.float32)
 
-            i = torchvision.ops.nms(boxes, scores, 0.5)  # NMS
+            i = torchvision.ops.nms(boxes, scores, 0)  # NMS
             index = i.tolist()
             coords = [coords[i] for i in index if 0 <= i < len(coords)]
             labels = [labels[i] for i in index if 0 <= i < len(labels)]
@@ -199,7 +171,7 @@ class GeoResults(Result):
             idxs = [i for i, label in enumerate(labels) if label == 'cancer']
             area = 0
             for idx in idxs:
-                [x1,y1, x2,y2] = coords[idx]
+                [x1, y1, x2, y2] = coords[idx]
                 area += (x2 - x1) * (y2 - y1)
             if area < self.patch_size ** 2 * 0.2 or len(idxs) < 4:
                 coords = [coords[i] for i in range(len(coords)) if i not in idxs]
@@ -218,7 +190,7 @@ class GeoResults(Result):
             idxs = [i for i, label in enumerate(labels) if label == 'cancer']
             area = 0
             for idx in idxs:
-                [x1,y1, x2,y2] = coords[idx]
+                [x1, y1, x2, y2] = coords[idx]
                 area += (x2 - x1) * (y2 - y1)
             if area < self.patch_size ** 2 * 0.03 or len(idxs) == 1:
                 coords = [coords[i] for i in range(len(coords)) if i not in idxs]
@@ -243,7 +215,7 @@ class GeoResults(Result):
             width, height = wsi.level_dimensions[0]
             mpp = int(wsi.properties.get('aperio.AppMag', '20'))
         step = int(self.patch_size * (mpp / 20))
-
+        patch_count = 0
         t_coords, t_labels, t_confs = [], [], []
         times = width // wsi.level_dimensions[self.show_level][0]
         for w_s in range(0, width - step, step):
@@ -271,7 +243,26 @@ class GeoResults(Result):
                     t_coords.append([coord])
                 t_confs.extend(confs)
                 t_labels.extend(labels)
+                patch_count += 1
         self.post_process(t_coords, t_labels, t_confs, base)
+
+    def cal_rate(self, coords, labels):
+        cancer_area = 0
+        prostate_area = 0
+        for coord, label in zip(coords, labels):
+            x_list = [x[0] for x in coord[0]]
+            y_list = [x[1] for x in coord[0]]
+            x1 = min(x_list)
+            x2 = max(x_list)
+            y1 = max(y_list)
+            y2 = max(y_list)
+            if label == 'cancer':
+                cancer_area += (x2 - x1) * (y2 - y1)
+            elif label == 'prostate':
+                prostate_area += (x2 - x1) * (y2 - y1)
+        if prostate_area == 0:
+            return 1
+        return cancer_area / prostate_area
 
     def post_process(self, coords, labels, confs, base):
         feature_template = {
@@ -320,6 +311,27 @@ class GeoResults(Result):
         output_path = os.path.join(self.output_dir, f"{base}.json")
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(selected_coords, f, indent=4)  # 缩进4空格美化格式
+        cancer_rate = self.cal_rate(coords, labels)
+        total_path = os.path.join(self.output_dir, f"exist_cancer.json")
+        data = {"geojson_files": [], "count": 0}
+        new_item = {
+            "filename": f"{base}.geojson",
+            "percentage": cancer_rate * 100
+        },
+        if os.path.exists(total_path):
+            with open(total_path, 'r') as f:
+                try:
+                    data = json.load(f)  # 读取现有内容
+                except json.JSONDecodeError:
+                    pass  # 若文件为空或格式错误，仍使用初始值
+
+        # 追加新项并更新count
+        data["geojson_files"].append(new_item)
+        data["count"] = len(data["geojson_files"])
+
+        # 写入文件（若不存在则自动创建）
+        with open(total_path, 'w') as f:
+            json.dump(data, f, indent=4)  # 格式化输出便于阅读
 
 
 class MultiGeoResults(GeoResults):
@@ -332,7 +344,6 @@ class MultiGeoResults(GeoResults):
                        for h in range(0, height - step, step)]
 
         t_coords, t_labels, t_confs = [], [], []
-
         def read_region(coord):
             input_img = wsi.read_region(coord, 0, (step, step))
             if isinstance(input_img, Image.Image):
@@ -350,6 +361,7 @@ class MultiGeoResults(GeoResults):
                 coords = [[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]
                 coords = [[item // times for item in sublist] for sublist in coords]
                 t_coords.append([coords])
+
             t_confs.extend(confs)
             t_labels.extend(labels)
 

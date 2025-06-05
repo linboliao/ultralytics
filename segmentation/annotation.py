@@ -255,22 +255,33 @@ class GeoAnnotation(Annotation):
                                 flag = False
                         if len(lc_coords) >= 6 and len(lc_coords) % 2 == 0:
                             contours_str = ' '.join(map(str, lc_coords))
-                            name = feature.get('properties', {}).get('classification', {}).get('name', '')
-                            color = feature.get('properties', {}).get('classification', {}).get('color', [])
-                            if name == 'non-cancer' or name == 'Negative' or color == [0, 255, 0]:
+                            # name = feature.get('properties', {}).get('classification', {}).get('name', '')
+                            # color = feature.get('properties', {}).get('classification', {}).get('color', [])
+                            # if name == 'non-cancer' or name == 'Negative' or color == [0, 255, 0]:
+                            #     clazz = 0
+                            # elif name == 'Region*' or color == [255, 0, 0]:
+                            #     clazz = 1
+                            # elif name == 'Necrosis' or color == [255, 255, 0]:
+                            #     clazz = 2
+                            # elif name == 'Other':
+                            #     clazz = 3
+                            # else:
+                            #     clazz = 1
+                            group = feature.get('properties', {}).get('group', '')
+                            if group == 'benign' or group == 'tangential_benign' or group == 'gland' or group == 'stroma':
                                 clazz = 0
-                            elif name == 'Region*' or color == [255, 0, 0]:
+                            elif group == 'pattern3' or group == 'pattern4' or group == 'PIN' or group== 'malignant' or group == 'tangential_malignant':
                                 clazz = 1
-                            elif name == 'Necrosis' or color == [255, 255, 0]:
+                            elif group == 'blood_vessel':
                                 clazz = 2
-                            elif name == 'Other':
-                                clazz = 3
                             else:
-                                clazz = 1
+                                clazz = 3
+                            # elif group == 'unknown' or group == 'artefact' or group == 'unknown_checked' or group == 'unknown_fp' or group == 'ignored' or group == 'unidentified' or group == 'others':
+                            #     clazz = 3
                             line = f'{clazz} {contours_str}'
                             f.write(line + '\n')
-                        if random.random() < 0.3:
-                            to_remove.append(feature)
+                        # if random.random() < 0.3:
+                        #     to_remove.append(feature)
 
                 with open(label_path, 'w') as f:
                     for feature in features:
@@ -287,9 +298,13 @@ class GeoAnnotation(Annotation):
                     # for feature in to_remove:
                     #     features.remove(feature)
 
-                patch = wsi.read_region((w, h), 0, (self.patch_size, self.patch_size))
+                # patch = wsi.read_region((w, h), 0, (self.patch_size, self.patch_size))|
+                patch = input_img
                 if isinstance(patch, np.ndarray):
                     patch = Image.fromarray(patch)
+                if os.path.exists(label_path) and os.path.getsize(label_path) == 0:
+                    os.remove(label_path)
+                    continue
                 patch.save(os.path.join(self.contour_dir, f'{base}_{w}_{h}.png'))
                 self.show_contours(f'{base}_{w}_{h}.png', patch_coords, patch)
                 patch = patch.resize((self.output_size, self.output_size))
@@ -590,22 +605,22 @@ def interpolate_points(p1, p2, num_insert):
     return points
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/2048', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/zenodo', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
 parser.add_argument('--output_dir', type=str, default='', help='output directory')
-parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
+parser.add_argument('--patch_size', type=int, default=512, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
-parser.add_argument('--output_size', type=int, default=2048, help='output size')
+parser.add_argument('--output_size', type=int, default=512, help='output size')
 parser.add_argument('--skip_done', action='store_true', help='skip done')
-parser.add_argument('--slide_list', type=list)
+parser.add_argument('--slide_list', type=list, default=['patient_012926_slide_01.svs'])
 if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
-    # GeoAnnotation(args).parallel_run()
+    GeoAnnotation(args).parallel_run()
     # LMAnnotation(args).parallel_run()
-    YOLO2LM(args).parallel_run()
+    # YOLO2LM(args).parallel_run()
     # KVAnnotation(args).parallel_run()

@@ -1,6 +1,6 @@
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 
 import argparse
 
@@ -8,10 +8,10 @@ from segmentation.result import *
 from segmentation.new_result import *
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--ckpt', type=list, default=['/data2/lbliao/Code/ultralytics/runs/detect/Pconv/weights/best.pt', '/data2/lbliao/Code/ultralytics/runs/detect/2048-1536-2/weights/best.pt', '/data2/lbliao/Code/ultralytics/runs/detect/yolov11/weights/best.pt','/data2/lbliao/Code/ultralytics/runs/detect/cbam/weights/best.pt', '/data2/lbliao/Code/ultralytics/runs/detect/train5/weights/best.pt'])
+parser.add_argument('--ckpt', type=list, default=['/data2/lbliao/Code/ultralytics/runs/detect/Pconv/weights/best.pt', '/data2/lbliao/Code/ultralytics/runs/detect/2048-1536-2/weights/best.pt', '/data2/lbliao/Code/ultralytics/runs/detect/yolov11/weights/best.pt','/data2/lbliao/Code/ultralytics/runs/detect/cbam/weights/best.pt', '/data2/lbliao/Code/ultralytics/runs/detect/pki/weights/best.pt'])
 # parser.add_argument('--ckpt', type=list, default=['/data2/lbliao/Code/ultralytics/runs/detect/train3/weights/best.pt'])
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0224', help='patch directory')
-parser.add_argument('--gpu', type=str, default='4', help='patch directory')
+parser.add_argument('--gpu', type=str, default='0', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0224/result/527', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
