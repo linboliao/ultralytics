@@ -33,7 +33,7 @@ class YOLOConverter:
         self.data_root = Path(data_root)
         self.slide_dir = Path(slide_dir) if slide_dir else self.data_root / 'slides'
         self.label_dir = Path(label_dir) if label_dir else self.data_root / 'geojson'
-        self.output_dir = Path(output_dir) if output_dir else self.data_root / 'dataset'
+        self.output_dir = Path(output_dir) if output_dir else self.data_root / 'dataset-8'
         self.patch_size = patch_size
         self.patch_level = patch_level
         self.slide_files = []
@@ -100,20 +100,20 @@ class YOLOConverter:
 # ====================== GeoJSON转换器 ======================
 class GeoJSONYOLOConverter(YOLOConverter):
     """处理GeoJSON标注的YOLO转换器"""
-    CLASS_MAPPING = {
-        'benign': 0, 'tangential_benign': 0, 'gland': 0, 'stroma': 0,
-        'pattern3': 1, 'pattern4': 1, 'PIN': 1, 'malignant': 1, 'tangential_malignant': 1,
-        'blood_vessel': 2,
-        'artefact': 3
-    }
-    # CLASS_MAPPING = {'pattern3': 1,
-    #                  'pattern4': 2,
-    #                  'benign': 3,
-    #                  'tangential_benign': 4,
-    #                  'tangential_malignant': 5,
-    #                  'unknown': 6,
-    #                  'PIN': 7,
-    #                  'artefact': 8}
+    # CLASS_MAPPING = {
+    #     'benign': 0, 'tangential_benign': 0, 'gland': 0, 'stroma': 0,
+    #     'pattern3': 1, 'pattern4': 1, 'PIN': 1, 'malignant': 1, 'tangential_malignant': 1,
+    #     'blood_vessel': 2,
+    #     'artefact': 3
+    # }
+    CLASS_MAPPING = {'pattern3': 0,
+                     'pattern4': 1,
+                     'benign': 2,
+                     'tangential_benign': 3,
+                     'tangential_malignant': 4,
+                     'unknown': 5,
+                     'PIN': 6,
+                     'artefact': 7}
 
     GROUP_MAPPING = {
         'p3': 'pattern3', 'P3': 'pattern3', 'p4': 'pattern4', 'P4': 'pattern4',
@@ -244,10 +244,11 @@ class GeoJSONYOLOConverter(YOLOConverter):
 # ====================== KVJSON转换器 ======================
 class KVYOLOConverter(YOLOConverter):
     """处理KV格式JSON标注的YOLO转换器"""
-    DEFAULT_PATCH_LEVEL = 3  # 默认使用第3级
+    LABELS = {
+
+    }
 
     def __init__(self, *args, **kwargs):
-        kwargs['patch_level'] = kwargs.get('patch_level', self.DEFAULT_PATCH_LEVEL)
         super().__init__(*args, **kwargs)
 
     def parse_kvjson(self, json_path):
@@ -295,51 +296,54 @@ class KVYOLOConverter(YOLOConverter):
                 actual_h = h * times
                 patch_box = box(actual_x, actual_y, actual_x + actual_w, actual_y + actual_h)
 
+                label_lines = []
+                has_labels = False
+
+                # 生成标签
+                for contour in contours:
+                    points = [(p["x"], p["y"]) for p in contour.get("points", [])]
+                    if not points:
+                        continue
+
+                    # 闭合多边形
+                    points.append(points[0])
+                    polygon = Polygon(points)
+                    polygon = make_valid(polygon)
+
+                    # 处理交集
+                    intersection = polygon.intersection(patch_box)
+                    if not intersection.is_empty:
+                        has_labels = True
+                        polygons = [intersection] if intersection.geom_type == 'Polygon' else list(intersection.geoms)
+
+                        for poly in polygons:
+                            exterior = list(poly.exterior.coords)
+                            normalized_points = []
+
+                            for pt in exterior:
+                                local_x = pt[0] - x
+                                local_y = pt[1] - y
+                                norm_x = max(0.0, min(1.0, local_x / (w * times)))
+                                norm_y = max(0.0, min(1.0, local_y / (h * times)))
+                                normalized_points.extend([norm_x, norm_y])
+
+                            clazz = self.LABELS.get(contours.get('color'), 0)
+                            points_str = " ".join(f"{p:.6f}" for p in normalized_points)
+                            label_lines.append(f"{clazz} {points_str}")
                 # 保存图像块
                 patch = slide.read_region((x, y), self.patch_level, (w, h)).convert("RGB")
                 img_name = f"{slide_id}_{x}_{y}.jpg"
                 patch.save(image_dir / img_name)
 
-                # 生成标签
-                label_path = label_dir / img_name.replace(".jpg", ".txt")
-                self.generate_yolo_labels(contours, patch_box, label_path, w, h, times)
-                patch_count += 1
+                # 保存结果
+                if has_labels:
+                    txt_name = f"{slide_id}_{x}_{y}.txt"
+                    with open(label_dir / txt_name, 'w') as f:
+                        f.write("\n".join(label_lines))
+
+                    patch_count += 1
 
         logger.info(f"生成 {patch_count} 个patch | 轮廓数量: {len(contours)}")
-
-    def generate_yolo_labels(self, contours, patch_box, label_path, patch_w, patch_h, times):
-        """生成YOLO格式标签"""
-        with open(label_path, "w") as f:
-            for contour in contours:
-                points = [(p["x"], p["y"]) for p in contour.get("points", [])]
-                if not points:
-                    continue
-
-                # 闭合多边形
-                points.append(points[0])
-                polygon = Polygon(points)
-                polygon = make_valid(polygon)
-
-                # 检查交集
-                if not polygon.intersects(patch_box):
-                    continue
-
-                # 处理交集
-                intersection = polygon.intersection(patch_box)
-                polygons = [intersection] if intersection.geom_type == 'Polygon' else list(intersection.geoms)
-
-                for poly in polygons:
-                    f.write("0 ")  # 默认类别ID
-
-                    # 转换并写入坐标点
-                    for point in poly.exterior.coords:
-                        local_x = point[0] - patch_box.bounds[0]
-                        local_y = point[1] - patch_box.bounds[1]
-                        x_norm = min(max(local_x / (patch_w * times), 0), 1)
-                        y_norm = min(max(local_y / (patch_h * times), 0), 1)
-                        f.write(f"{x_norm:.6f} {y_norm:.6f} ")
-
-                    f.write("\n")
 
 
 parser = argparse.ArgumentParser()
