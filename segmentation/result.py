@@ -1,530 +1,324 @@
+import gc
 import json
 import os
-import shutil
-import sys
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import List
 
-import cv2
 import numpy as np
-import openslide
 import torch
 import torchvision
 from PIL import Image
 from loguru import logger
 
+from segmentation.wsi import WSIOperator
 from ultralytics import YOLO
-from ultralytics.engine.results import Results
-import xml.etree.ElementTree as ET
-
-sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
-from aslide import Aslide
 
 Image.MAX_IMAGE_PIXELS = None
 
 
-def is_background(img, threshold=20):
-    img_array = np.array(img)
-    diff = np.ptp(img_array, axis=2)  # ptp直接计算max-min
-    return (diff > threshold).mean() < 0.15
+class BaseProcessor:
+    def __init__(self, config):
+        self.config = config
+        self.models = self._init_models()
+        self._setup_paths()
 
+    def _init_models(self):
+        """模型工厂方法"""
+        return [YOLO(ckpt) for ckpt in self.config.ckpt]
 
-class Result:
-    def __init__(self, opt):
-        self.slide_dir = opt.slide_dir if opt.slide_dir else os.path.join(opt.data_root, f'slides')
-        self.slide_list = opt.slide_list
-        self.gpu = opt.gpu
-        self.models = []
-        for ckpt in opt.ckpt:
-            self.models.append(YOLO(ckpt))
+    def _setup_paths(self):
+        """路径配置统一管理"""
+        self.slide_dir = Path(self.config.slide_dir)
+        self.output_dir = Path(self.config.output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.patch_size = opt.patch_size
-        self.infer_size = opt.infer_size
+    def _infer(self):
+        raise NotImplementedError
 
-        self.output_dir = opt.output_dir if opt.output_dir else os.path.join(opt.data_root, f'results/')
-        os.makedirs(os.path.dirname(self.output_dir), exist_ok=True)
-        self.show_level = opt.show_level
+    def _multi_infer(self):
+        raise NotImplementedError
 
-        self.label_dict = {0: 'prostate', 1: 'cancer', 2: 'vessel', 4: 'epithelium', 3: 'ganglion'}
-        self.color_dict = {'prostate': [0, 255, 0], 'cancer': [255, 0, 0], 'burn': [0, 0, 255], 'vessel': [255, 255, 0], 'epithelium': [255, 0, 255], 'ganglion': [0, 255, 255]}
-        self.slide = opt.slide if opt.slide else None
-
-    def infer(self, img, gpu):
-        raise NotImplementedError()
-
-    def process(self, data):
-        # data: img, slide
-        raise NotImplementedError()
-
-    def open_slide(self, slide):
-        base, ext = os.path.splitext(slide)
-        slide_path = os.path.join(self.slide_dir, slide)
-        if ext == '.kfb':
-            wsi = Aslide(slide_path)
-        elif ext == '.tif':
-            wsi = Image.open(slide_path)
-            wsi.level_dimensions = [[wsi.size[0], wsi.size[1]]]
-            wsi.mpp = 20
+    def parallel_process(self):
+        if self.config.slide_list:
+            slide_paths = [Path(self.config.data_root) / slide for slide in self.config.slide_list]
+        elif self.config.slide:
+            slide_paths = [Path(self.config.data_root) / self.config.slide]
         else:
-            wsi = openslide.OpenSlide(slide_path)
-            wsi.mpp = int(wsi.properties.get('aperio.AppMag', '20'))
-        return wsi
-
-    @property
-    def slides(self):
-        if self.slide_list:
-            slides = self.slide_list
-        elif self.slide:
-            slides = [self.slide]
-        else:
-            slides = [f for f in os.listdir(self.slide_dir) if os.path.isfile(os.path.join(self.slide_dir, f))]
-        return slides
-
-    def run_(self):
-        for slide in self.slides:
-            self.process(slide)
-
-    def parallel_run(self):
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(self.process, slide) for slide in self.slides]
+            slide_dir = Path(self.config.slide_dir) if self.config.slide_dir else Path(self.config.data_root) / 'slides'
+            slide_paths = [f for f in slide_dir.iterdir() if f.is_file()]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(self.process_slide, slide_path) for slide_path in slide_paths]
             for future in as_completed(futures):
                 try:
                     future.result()
                 except Exception:
                     traceback.print_exc()
 
+    # 抽象方法由子类实现
+    def process_slide(self, slide_path):
+        raise NotImplementedError
 
-class GeoResults(Result):
-    def __init__(self, opt):
-        super().__init__(opt)
+    def _process_tile(self, tile_img):
+        raise NotImplementedError
 
-    def infer(self, img, gpu):
-        # img : str or path or PIL.Image or np.ndarray：BGR
-        results = self.models[0](img, device=gpu, agnostic_nms=True, iou=0.4)
+    def _save_results(self, results, slide_id: str):
+        raise NotImplementedError
+
+    def _generate_tiles(self, wsi) -> list:
+        """生成WSI多分辨率切片坐标（参考网页1、网页6的tile生成策略）"""
+        base_level = 0  # 最高分辨率层级
+        patch_size = self.config.patch_size  # 默认512x512
+        overlap = 0  # 默认64像素重叠 self.config.overlap
+
+        # 获取基础层级的全图尺寸
+        base_width, base_height = wsi.level_dimensions[base_level]
+
+        # 计算有效步长（考虑重叠）
+        step = patch_size - overlap
+
+        # 生成坐标网格
         coords = []
-        labels = []
-        confs = []
+        for y in range(0, base_height - overlap, step):
+            for x in range(0, base_width - overlap, step):
+                # 添加坐标及对应层级信息
+                coords.append({
+                    "x": x,
+                    "y": y,
+                    "level": base_level,
+                    "size": patch_size,
+                    "overlap": overlap
+                })
+
+        return coords
+
+    def _parallel_process(self, wsi, tile_coords) -> list:
+        """并行处理切片"""
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+
+        # 内存控制参数
+        BATCH_SIZE = 100
+        MAX_WORKERS = min(8, os.cpu_count() * 2)  # 经验值
+
+        # 线程安全的数据结构
+        results = []
+        lock = threading.Lock()
+
+        # 带内存管理的处理函数
+        def process_single_tile(tile_info):
+            try:
+                # 读取图像区域
+                tile_img = wsi.read_region(
+                    (tile_info["x"], tile_info["y"]),
+                    tile_info["level"],
+                    (tile_info["size"], tile_info["size"]),
+                    check_background=True
+                )
+                if not tile_img:
+                    return None
+
+                if isinstance(tile_img, Image.Image):
+                    tile_img = tile_img.convert('RGB')
+
+                # 执行推理
+                with torch.no_grad():
+                    detections = self._process_tile(tile_img)
+
+                # 坐标映射
+                scale_factor = tile_info["level"] + 1
+                scaled_detections = []
+                for det in detections:
+                    x1 = int(det["bbox"][0] * scale_factor + tile_info["x"])
+                    y1 = int(det["bbox"][1] * scale_factor + tile_info["y"])
+                    x2 = int(det["bbox"][2] * scale_factor + tile_info["x"])
+                    y2 = int(det["bbox"][3] * scale_factor + tile_info["y"])
+                    scaled_detections.append({
+                        "bbox": [x1, y1, x2, y2],
+                        "label": det["label"],
+                        "conf": det["conf"]
+                    })
+                return scaled_detections
+            except Exception as e:
+                traceback.print_exc()
+                return None
+
+        # 分批处理机制
+        for i in range(0, len(tile_coords), BATCH_SIZE):
+            batch = tile_coords[i:i + BATCH_SIZE]
+
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = [executor.submit(process_single_tile, t) for t in batch]
+
+                for future in futures:
+                    result = future.result()
+                    if result:
+                        with lock:
+                            results.extend(result)
+
+            # 主动释放内存
+            if hasattr(torch.cuda, 'empty_cache'):
+                torch.cuda.empty_cache()
+            gc.collect()
+
+        return results
+
+
+class GeoJSONProcessor(BaseProcessor):
+    def __init__(self, config):
+        super().__init__(config)
+        # 医学检测类别映射（示例：前列腺癌病理检测）
+        self.label_map = {
+            0: "prostate",
+            1: "cancer",
+            2: "vessel",
+            3: "ganglion",
+            4: "epithelium"
+        }
+        self.color_schema = {
+            "prostate": [0, 255, 0],  # 绿色
+            "cancer": [255, 0, 0],  # 红色
+            "vessel": [255, 255, 0],  # 黄色
+            "ganglion": [0, 255, 255],  # 青色
+            "epithelium": [255, 0, 255]  # 品红
+        }
+        self.infer_params = {  # 模型推理参数
+            'agnostic_nms': True,
+            'iou': 0.4,
+            'conf': 0.3
+        }
+
+    def process_slide(self, slide_path: Path):
+        """处理整张病理切片的主流程"""
+        wsi = WSIOperator(slide_path)
+        tile_coords = self._generate_tiles(wsi)
+        results = self._parallel_process(wsi, tile_coords)
+        self._save_results(results, slide_path.stem)
+
+    def _process_tile(self, tile_img: np.ndarray) -> list:
+        """处理单个图像块的多模型协同推理"""
+        boxes, labels, confs = [], [], []
+
+        # 第一阶段：辅助模型检测
+        for model in self.models[:-1]:
+            results = model(tile_img, device=self.config.gpu, agnostic_nms=True, iou=0.4, conf=0.3)
+            _boxes, _labels, _confs = self._filter_results(results)
+            boxes.extend(_boxes)
+            labels.extend(_labels)
+            confs.extend(_confs)
+
+        # 第二阶段：主模型精细检测
+        final_results = self.models[-1](tile_img, device=self.config.gpu, agnostic_nms=True, iou=0.2, conf=0.3)
+        _boxes, _labels, _confs = self._filter_results(final_results)
+        if len(final_results) >= 3:
+            boxes.extend(_boxes)
+            labels.extend(_labels)
+            confs.extend(_confs)
+        result = [{"bbox": boxes[i], "label": labels[i], "conf": confs[i]} for i in range(len(labels))]
+        return result
+
+    def _filter_results(self, results):
+        """过滤并标准化检测结果"""
+        coords, labels, confs = [], [], []
+        cancer_area = 0
+        remove_list = []
         for result in results:
             boxes = result.boxes
-            cancer_area = 0
-            remove_list = []
             for i, box in enumerate(reversed(boxes)):
                 [x1, y1, x2, y2] = box.xyxy.tolist()[0]
-                label = self.label_dict[int(box.cls.tolist()[0])]
-                if label == "cancer":
-                    cancer_area += (x2 - x1) * (y2 - y1)
-                    remove_list.append(i)
+                label = self.label_map.get(int(box.cls.tolist()[0]), "unknown")
                 conf = box.conf.tolist()[0]
-
                 coords.append([x1, y1, x2, y2])
                 labels.append(label)
                 confs.append(conf)
-            if cancer_area < self.infer_size ** 2 * 0.1:
-                coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
-                labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
-                confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
-        return coords, labels, confs
 
-    def multi_infer(self, img, gpu):
-        coords, labels, confs = [], [], []
-        for model in self.models[:-1]:
-            results = model(img, device=gpu, agnostic_nms=True, iou=0.4)
-            cancer_area = 0
-            remove_list = []
-            for result in results:
-                boxes = result.boxes
-                for i, box in enumerate(reversed(boxes)):
-                    [x1, y1, x2, y2] = box.xyxy.tolist()[0]
-                    label = self.label_dict[int(box.cls.tolist()[0])]
-                    conf = box.conf.tolist()[0]
-
-                    coords.append([x1, y1, x2, y2])
-                    labels.append(label)
-                    confs.append(conf)
-                    if label == "cancer":
-                        cancer_area += (x2 - x1) * (y2 - y1)
-                        remove_list.append(i)
-
-            if cancer_area < self.infer_size ** 2 * 0.1:
-                coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
-                labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
-                confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
-
-        if len(coords) > 0:
-            boxes = torch.tensor(coords, dtype=torch.float32)
-            scores = torch.tensor(confs, dtype=torch.float32)
-
-            i = torchvision.ops.nms(boxes, scores, 0.5)  # NMS
-            index = i.tolist()
-            coords = [coords[i] for i in index if 0 <= i < len(coords)]
-            labels = [labels[i] for i in index if 0 <= i < len(labels)]
-            confs = [confs[i] for i in index if 0 <= i < len(confs)]
-        results = self.models[-1](img, device=gpu, agnostic_nms=True)
-        cancer_area = 0
-        remove_list = []
-        length = len(coords)
-        for result in results:
-            boxes = result.boxes
-            for i, box in enumerate(reversed(boxes)):
-                [x1, y1, x2, y2] = box.xyxy.tolist()[0]
-                label = self.label_dict[int(box.cls.tolist()[0])]
-                conf = box.conf.tolist()[0]
-                if conf < 0.3:
-                    continue
-                coords.append([x1, y1, x2, y2])
-                labels.append(label)
-                confs.append(conf * 0.1)
                 if label == "cancer":
                     cancer_area += (x2 - x1) * (y2 - y1)
-                    remove_list.append(i + length)
+                    remove_list.append(i)
 
-        if cancer_area < self.patch_size ** 2 * 0.2:
+        if cancer_area < self.config.patch_size ** 2 * 0.1:
             coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
             labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
             confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
-        if len(coords) > 0:
-            boxes = torch.tensor(coords, dtype=torch.float32)
-            scores = torch.tensor(confs, dtype=torch.float32)
-
-            i = torchvision.ops.nms(boxes, scores, 0.05)  # NMS
-            index = i.tolist()
-            coords = [coords[i] for i in index if 0 <= i < len(coords)]
-            labels = [labels[i] for i in index if 0 <= i < len(labels)]
-            confs = [confs[i] for i in index if 0 <= i < len(confs)]
-            idxs = [i for i, label in enumerate(labels) if label == 'cancer']
-            area = 0
-            for idx in idxs:
-                [x1,y1, x2,y2] = coords[idx]
-                area += (x2 - x1) * (y2 - y1)
-            if area < self.patch_size ** 2 * 0.17 or len(idxs) < 3:
-                coords = [coords[i] for i in range(len(coords)) if i not in idxs]
-                labels = [labels[i] for i in range(len(labels)) if i not in idxs]
-                confs = [confs[i] for i in range(len(confs)) if i not in idxs]
         return coords, labels, confs
 
-    def process(self, slide):
-        base, ext = os.path.splitext(slide)
-        slide_path = os.path.join(self.slide_dir, slide)
-        if ext == '.kfb':
-            wsi = Aslide(slide_path)
-            width, height = wsi.level_dimensions[0]
-            mpp = wsi.mpp
-        elif ext == '.tif':
-            wsi = Image.open(slide_path)
-            width, height = wsi.size[0], wsi.size[1]
-            mpp = 20
-        else:
-            wsi = openslide.OpenSlide(slide_path)
-            width, height = wsi.level_dimensions[0]
-            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
-        step = int(self.patch_size * (mpp / 20))
+    @staticmethod
+    def _merge_results(initial, final) -> list:
+        """多模型结果融合策略"""
+        # 实现NMS融合逻辑
+        all_boxes = torch.cat([initial, final], dim=0)
+        # 执行NMS过滤
+        keep_idx = torchvision.ops.nms(
+            boxes=all_boxes[:, :4],
+            scores=all_boxes[:, 4],
+            iou_threshold=0.1
+        )
+        return all_boxes[keep_idx].tolist()
 
-        t_coords, t_labels, t_confs = [], [], []
-        times = width // wsi.level_dimensions[self.show_level][0]
-        for w_s in range(0, width - step, step):
-            for h_s in range(0, height - step, step):
-                if ext == '.tif':
-                    input_img = wsi.crop((w_s, h_s, w_s + step, h_s + step))
-                else:
-                    input_img = wsi.read_region((w_s, h_s), 0, (step, step))
-                if is_background(input_img):
-                    continue
-                if isinstance(input_img, Image.Image):
-                    input_img = input_img.convert('RGB')
-                else:
-                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
-
-                # coords, labels, confs = self.multi_infer(input_img, self.gpu)
-                coords, labels, confs = self.infer(input_img, self.gpu)
-                for (x1, y1, x2, y2) in coords:
-                    x1 = int(x1 + w_s)
-                    y1 = int(y1 + h_s)
-                    x2 = int(x2 + w_s)
-                    y2 = int(y2 + h_s)
-                    coord = [[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]
-                    coord = [[item // times for item in sublist] for sublist in coord]
-                    t_coords.append([coord])
-                t_confs.extend(confs)
-                t_labels.extend(labels)
-        self.post_process(t_coords, t_labels, t_confs, base)
-
-    def post_process(self, coords, labels, confs, base):
-        feature_template = {
-            "type": "Feature",
-            "geometry": {"type": "Polygon", "coordinates": None},
-            "properties": {
-                "objectType": "annotation",
-                "classification": {"name": None, "color": None}
-            }
-        }
-
-        features = [
-            {
-                **feature_template,  # 复制模板
-                "id": str(uuid.uuid4()),  # 生成唯一 ID
-                "geometry": {"type": "Polygon", "coordinates": coord},  # 填充坐标
+    def _save_results(self, results, slide_id: str):
+        """生成GeoJSON格式的标注文件"""
+        features = []
+        for idx, detection in enumerate(results):
+            feature = {
+                "type": "Feature",
+                "id": str(uuid.uuid4()),
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": self._bbox_to_polygon(detection['bbox'])
+                },
                 "properties": {
+                    "objectType": "annotation",
                     "classification": {
-                        "name": label,
-                        "color": self.color_dict[label]  # 填充颜色
+                        "name": detection['label'],
+                        "color": self.color_schema[detection['label']],
+                        "confidence": detection['conf']
                     }
                 }
             }
-            for coord, label in zip(coords, labels)
-        ]
+            features.append(feature)
 
         geojson = {
             "type": "FeatureCollection",
             "features": features
         }
 
-        output_path = os.path.join(self.output_dir, f"{base}.geojson")
+        output_path = self.output_dir / f"{slide_id}.geojson"
         with open(output_path, 'w') as f:
             json.dump(geojson, f, indent=2)
-        logger.info(f'generated {base}.geojson contour json!!!')
 
-        indexed_confs = list(enumerate(confs))
-
-        # 按值降序排序（确保稳定性）
-        sorted_pairs = sorted(indexed_confs, key=lambda x: x[1], reverse=True)
-
-        # 提取前50名的索引
-        top50_indices = [idx for idx, val in sorted_pairs[:min(50, len(sorted_pairs))]]
-        selected_coords = [coords[i] for i in top50_indices]
-        selected_coords = [coord[0][:4] for coord in selected_coords]
-        output_path = os.path.join(self.output_dir, f"{base}.json")
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(selected_coords, f, indent=4)  # 缩进4空格美化格式
+    @staticmethod
+    def _bbox_to_polygon(bbox: list) -> list:
+        """将边界框转换为GeoJSON多边形坐标"""
+        x1, y1, x2, y2 = bbox
+        return [[[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]]
 
 
-class MultiGeoResults(GeoResults):
-    def process(self, slide):
-        wsi = self.open_slide(slide)
-        width, height = wsi.level_dimensions[0]
-        step = int(self.patch_size * (wsi.mpp / 20))
-        times = wsi.level_dimensions[0][0] // wsi.level_dimensions[self.show_level][0]
-        coordinates = [(w, h) for w in range(0, width - step, step)
-                       for h in range(0, height - step, step)]
+class KVProcessor(BaseProcessor):
+    def __init__(self, config):
+        super().__init__(config)
+        # 医学检测类别颜色映射
+        self.color_schema = {
+            "prostate": "#00FF00",  # 绿色
+            "cancer": "#FF0000",  # 红色
+            "vessel": "#FFFF00",  # 黄色
+            "ganglion": "#00FFFF"  # 青色
+        }
+        self.annotation_template = {  # 标注模板（参考网页5的JSON结构）
+            "points": [],
+            "imageId": 0,
+            "guid": "",
+            "name": "",
+            "imageindex": "1",
+            "region": {"x": 0, "y": 0, "width": 0, "height": 0}
+        }
 
-        t_coords, t_labels, t_confs = [], [], []
-
-        def read_region(coord):
-            input_img = wsi.read_region(coord, 0, (step, step))
-            if isinstance(input_img, Image.Image):
-                input_img = input_img.convert('RGB')
-            else:
-                input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
-            if is_background(input_img):
-                return
-            coords, labels, confs = self.multi_infer(input_img, self.gpu)
-            for (x1, y1, x2, y2) in coords:
-                x1 = int(x1 + coord[0])
-                y1 = int(y1 + coord[1])
-                x2 = int(x2 + coord[0])
-                y2 = int(y2 + coord[1])
-                coords = [[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]
-                coords = [[item // times for item in sublist] for sublist in coords]
-                t_coords.append([coords])
-            t_confs.extend(confs)
-            t_labels.extend(labels)
-
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = [executor.submit(read_region, coord) for coord in coordinates]
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception:
-                    traceback.print_exc()
-        base, ext = os.path.splitext(slide)
-        self.post_process(t_coords, t_labels, t_confs, base)
-
-
-class TiffResults(Result):
-    def __init__(self, opt):
-        super().__init__(opt)
-
-    def infer(self, img, gpu):
-        # img : str or path or PIL.Image or np.ndarray：BGR
-        results = self.models[0](img, device=gpu, agnostic_nms=True, iou=0.4)
-        if isinstance(results[0], Results):
-            return results[0].plot()
-        else:
-            return np.zeros([self.patch_size, self.patch_size, 3], dtype=np.uint8)
-
-    def process(self, slide):
-        base, ext = os.path.splitext(slide)
-        slide_path = os.path.join(self.slide_dir, slide)
-        if ext == '.kfb':
-            wsi = Aslide(slide_path)
-            width, height = wsi.level_dimensions[0]
-            mpp = wsi.mpp
-        elif ext == '.tif':
-            wsi = Image.open(slide_path)
-            width, height = wsi.size[0], wsi.size[1]
-            mpp = 20
-        else:
-            wsi = openslide.OpenSlide(slide_path)
-            width, height = wsi.level_dimensions[0]
-            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
-        step = int(self.patch_size * wsi.mpp / 20)
-        times = step // self.patch_size
-        canvas = np.zeros([height, width, 3], dtype=np.uint8)
-        for w_s in range(0, width - step, step):
-            for h_s in range(0, height - step, step):
-                if ext == '.tif':
-                    input_img = wsi.crop((w_s, h_s, w_s + step, h_s + step))
-                else:
-                    input_img = wsi.read_region((w_s, h_s), 0, (step, step))
-                if isinstance(input_img, Image.Image):
-                    input_img = input_img.convert('RGB')
-                    numpy_array = np.array(input_img)
-                    input_img = cv2.cvtColor(numpy_array, cv2.COLOR_RGB2BGR)
-                else:
-                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
-                h_i, w_i = h_s // times, w_s // times
-                if is_background(input_img):
-                    input_img = cv2.resize(input_img, (self.patch_size, self.patch_size))
-                    canvas[h_i:h_i + self.patch_size, w_i:w_i + self.patch_size] = input_img
-                    logger.info(f'{slide} {w_s} --- {h_s} is background.')
-                    continue
-
-                output_img = self.infer(input_img, self.gpu)
-                output_img = cv2.resize(output_img, (self.patch_size, self.patch_size))
-                canvas[h_i:h_i + self.patch_size, w_i:w_i + self.patch_size] = output_img
-        output_path = os.path.join(self.output_dir, f'{base}.png')
-        canvas = Image.fromarray(canvas)
-        canvas.thumbnail((width // 2, height // 2))
-        canvas.save(output_path)
-        logger.info(f'{slide} result saved to {output_path}')
-
-
-class MdsResults(Result):
-    def __init__(self, opt):
-        super().__init__(opt)
-        self.color_dict = {'prostate': '4278255615', 'cancer': '4294901760', 'burn': [0, 0, 255], 'vessel': [255, 255, 0], 'epithelium': [255, 0, 255], 'ganglion': [0, 255, 255]}
-
-    def infer(self, img, gpu):
-        # img : str or path or PIL.Image or np.ndarray：BGR
-        results = self.model(img, device=gpu, agnostic_nms=True, iou=0.4)
-        coords = []
-        labels = []
-        for result in results:
-            boxes = result.boxes
-            cancer_area = 0
-            remove_list = []
-            for i, box in enumerate(reversed(boxes)):
-                [x, y, w, h] = box.xywh.tolist()[0]
-                label = self.label_dict[int(box.cls.tolist()[0])]
-                if label == "cancer":
-                    cancer_area += w * h
-                    remove_list.append(i)
-                coords.append([x, y, w, h])
-                labels.append(label)
-            if cancer_area < self.infer_size ** 2 * 0.1:
-                coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
-                labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
-        return coords, labels
-
-    def process(self, slide):
-        base, ext = os.path.splitext(slide)
-        slide_path = os.path.join(self.slide_dir, slide)
-        if ext == '.kfb':
-            wsi = Aslide(slide_path)
-            width, height = wsi.level_dimensions[0]
-            mpp = wsi.mpp
-        elif ext == '.tif':
-            wsi = Image.open(slide_path)
-            width, height = wsi.size[0], wsi.size[1]
-            mpp = 20
-        else:
-            wsi = openslide.OpenSlide(slide_path)
-            width, height = wsi.level_dimensions[0]
-            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
-        step = int(self.patch_size * (mpp / 20))
-
-        t_coords, t_labels = [], []
-        for w_s in range(0, width - step, step):
-            for h_s in range(0, height - step, step):
-                if ext == '.tif':
-                    input_img = wsi.crop((w_s, h_s, w_s + step, h_s + step))
-                else:
-                    input_img = wsi.read_region((w_s, h_s), 0, (step, step))
-                if is_background(input_img):
-                    continue
-                if isinstance(input_img, Image.Image):
-                    input_img = input_img.convert('RGB')
-                else:
-                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
-
-                coords, labels = self.infer(input_img, self.gpu)
-                for (x, y, w, h) in coords:
-                    x = int(x + w_s)
-                    y = int(y + h_s)
-                    w = int(w)
-                    h = int(h)
-                    t_coords.append([x, y, w, h])
-
-                t_labels.extend(labels)
-
-        self.post_process(t_coords, t_labels, base)
-
-    def post_process(self, coords, labels, base):
-        """
-        将 (x, y, w, h) 列表保存为 XML 文件。
-
-        参数:
-            annotation_list: 包含 (x, y, w, h) 的列表。
-            output_file: 输出 XML 文件的路径。
-        """
-        root = ET.Element("Annotations", attrib={"Unit": "", "Scale": "1"})
-
-        for idx, ([x, y, w, h], label) in enumerate(zip(coords, labels)):
-            annotation = ET.SubElement(root, "Annotation", attrib={
-                "Visible": "-1",
-                "Measurement": "1",
-                "FontUnderline": "0",
-                "Type": "Point2",
-                "Width": "1",
-                "Selected": "0",
-                "FontFamily": "Arial",
-                "Subtype": "2",
-                "GUID": f"{uuid.uuid4()}",  # 可以生成唯一的 GUID 或使用其他方式
-                "DetailVisible": "0",
-                "FontItalic": "0",
-                "FontBold": "0",
-                "Color": self.color_dict[label],
-                "FontSize": "12"
-            })
-
-            ET.SubElement(annotation, "Metadata", attrib={
-                "Length": "-1",
-                "Angle": "-1",
-                "Name": f"标注 {idx + 1}",
-                "Scale": "1",
-                "Radius": "-1",
-                "Detail": f"描述 {idx + 1}",
-                "Area": f"{w * h}",
-                "ArcLength": "-1",
-                "Path": ""
-            })
-
-            ET.SubElement(annotation, "P", attrib={"X": str(x - w / 2), "Y": str(y - h / 2)})
-
-            ET.SubElement(annotation, "S", attrib={"H": str(h), "W": str(w)})
-
-        tree = ET.ElementTree(root)
-        output_dir = os.path.join(self.output_dir, f'{base}.dsmeta')
-        os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, f'notes')
-        tree.write(output_path, encoding="utf-8", xml_declaration=True)
-        print(f"XML 文件已保存到 {output_path}")
-
-
-class KVResults(MdsResults):
-    def post_process(self, coords, labels, base):
+    def _save_results(self, results: List[dict], slide_id: str):
+        """重写保存方法（保持与GeoJSONProcessor相同签名）"""
         annotation = []
-        for idx, ([x, y, w, h], label) in enumerate(zip(coords, labels)):
+
+        for idx, detection in enumerate(results):
             annotation.append({
                 "points": [],
                 "imageId": 0,
@@ -543,138 +337,23 @@ class KVResults(MdsResults):
                 "fontItalic": False,
                 "fontBold": False,
                 "visible": True,
-                "color": self.color_dict[label],
+                "color": self.color_schema[detection['label']],
                 "measurement": False,
                 "radius": 0,
                 "arcLength": 0,
                 "angle": 0,
-                "region": {
-                    "x": x - w / 2,
-                    "y": y - h / 2,
-                    "width": w,
-                    "height": h
-                }
+                "region": self._bbox_to_region(detection)
             })
-        base = base.replace('.', '_')
-        path = os.path.join(self.output_dir, f"{base}_kfb/Annotations/")
+        slide_id = slide_id.replace('.', '_')
+        path = os.path.join(self.output_dir, f"{slide_id}_kfb/Annotations/")
         os.makedirs(path, exist_ok=True)
         output_path = os.path.join(path, f"1.json")
         with open(output_path, 'w') as f:
             json.dump(annotation, f, indent=2)
-        logger.info(f'generated {base}.json contour json!!!')
+        logger.info(f'generated {slide_id}.json contour json!!!')
 
-
-class LMResults(Result):
-    def __init__(self, opt):
-        super().__init__(opt)
-
-    def process(self, slide):
-        base, ext = os.path.splitext(slide)
-        slide_path = os.path.join(self.slide_dir, slide)
-        if ext == '.kfb':
-            wsi = Aslide(slide_path)
-            width, height = wsi.level_dimensions[0]
-            mpp = wsi.mpp
-        elif ext == '.tif':
-            wsi = Image.open(slide_path)
-            width, height = wsi.size[0], wsi.size[1]
-            mpp = 20
-        else:
-            wsi = openslide.OpenSlide(slide_path)
-            width, height = wsi.level_dimensions[0]
-            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
-        step = int(self.patch_size * (mpp / 20))
-
-        os.makedirs(self.output_dir, exist_ok=True)
-        for w_s in range(0, width - step, step):
-            for h_s in range(0, height - step, step):
-                if ext == '.tif':
-                    input_img = wsi.crop((w_s, h_s, w_s + step, h_s + step))
-                else:
-                    input_img = wsi.read_region((w_s, h_s), 0, (step, step))
-                if is_background(input_img):
-                    continue
-                if isinstance(input_img, Image.Image):
-                    input_img = input_img.convert('RGB')
-                    numpy_array = np.array(input_img)
-                    input_img = cv2.cvtColor(numpy_array, cv2.COLOR_RGB2BGR)
-                else:
-                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
-                base, ext = os.path.splitext(slide)
-                cv2.imwrite(os.path.join(self.output_dir, f'{base}_{w_s}_{h_s}.jpg'), input_img)
-                results = self.model(input_img, device=self.gpu)
-                shapes = []
-                for result in results:
-                    boxes = result.boxes  # Boxes object for bounding box outputs
-                    for i, box in enumerate(reversed(boxes)):
-                        [x1, y1, x2, y2] = box.xyxy.tolist()[0]
-                        points = [[x1, y1], [x2, y2]]
-                        shapes.append({
-                            "label": self.label_dict[int(box.cls.tolist()[0])],
-                            "points": points,
-                            "group_id": None,
-                            "description": "",
-                            "shape_type": "rectangle",
-                            "flags": {},
-                            "mask": None
-                        })
-                ann = {
-                    "version": "5.6.0",
-                    "flags": {},
-                    "shapes": shapes,
-                    "imagePath": f"{base}_{w_s}_{h_s}.jpg",
-                    "imageData": None,
-                    "imageHeight": step,
-                    "imageWidth": step,
-                }
-                with open(os.path.join(self.output_dir, f'{base}_{w_s}_{h_s}.json'), 'w') as f:
-                    json.dump(ann, f, indent=2)
-                logger.info(f'process {base}_{w_s}_{h_s}.jpg')
-
-
-class PicResults(Result):
-    def __init__(self, opt):
-        super().__init__(opt)
-        self.label_dir = os.path.join(opt.data_root, f'lms-cell/')
-        self.image_dir = os.path.join(opt.data_root, f'images/')
-        os.makedirs(self.label_dir, exist_ok=True)
-
-    @property
-    def slides(self):
-        return os.listdir(self.image_dir)
-
-    def process(self, img):
-        img_path = os.path.join(self.image_dir, img)
-        input_img = cv2.imread(img_path)
-        results = self.models[0](input_img, device=self.gpu)
-        shapes = []
-        for result in results:
-            boxes = result.boxes  # Boxes object for bounding box outputs
-            for i, box in enumerate(reversed(boxes)):
-                [x1, y1, x2, y2] = box.xyxy.tolist()[0]
-                points = [[x1, y1], [x2, y2]]
-                label = self.label_dict[int(box.cls.tolist()[0])]
-                if label != 'vessel':
-                    continue
-                shapes.append({
-                    "label": label,
-                    "points": points,
-                    "group_id": None,
-                    "description": "",
-                    "shape_type": "rectangle",
-                    "flags": {},
-                    "mask": None
-                })
-        ann = {
-            "version": "5.6.0",
-            "flags": {},
-            "shapes": shapes,
-            "imagePath": img,
-            "imageData": None,
-            "imageHeight": self.patch_size,
-            "imageWidth": self.patch_size,
-        }
-        base, _ = os.path.splitext(img)
-        with open(os.path.join(self.label_dir, f'{base}.json'), 'w', encoding='utf-8') as f:
-            json.dump(ann, f, indent=2)
-        logger.info(f'process {base}.jpg')
+    @staticmethod
+    def _bbox_to_region(detection: dict) -> dict:
+        """坐标转换（与GeoJSON共享逻辑）"""
+        x1, y1, x2, y2 = detection['bbox']
+        return {"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1}
