@@ -314,10 +314,7 @@ class GeoResults(Result):
         cancer_rate = self.cal_rate(coords, labels)
         total_path = os.path.join(self.output_dir, f"exist_cancer.json")
         data = {"geojson_files": [], "count": 0}
-        new_item = {
-            "filename": f"{base}.geojson",
-            "percentage": cancer_rate * 100
-        },
+        new_item = {"filename": f"{base}.geojson", "percentage": cancer_rate * 100}
         if os.path.exists(total_path):
             with open(total_path, 'r') as f:
                 try:
@@ -326,7 +323,9 @@ class GeoResults(Result):
                     pass  # 若文件为空或格式错误，仍使用初始值
 
         # 追加新项并更新count
-        data["geojson_files"].append(new_item)
+        items = data['geojson_files'].copy()  # 复制原列表
+        items.append(new_item)  # 追加新字典到列表
+        data['geojson_files'].append(new_item)
         data["count"] = len(data["geojson_files"])
 
         # 写入文件（若不存在则自动创建）
