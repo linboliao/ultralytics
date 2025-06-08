@@ -1,4 +1,5 @@
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "6"      # 单卡：仅GPU 0可见
 import cv2
 import numpy as np
 import argparse
@@ -11,7 +12,7 @@ from tqdm import tqdm
 from ultralytics import YOLO
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--ckpt', type=str, default='/data2/lbliao/Code/ultralytics/runs/segment/pki/weights/best.pt')
+parser.add_argument('--ckpt', type=str, default='/data2/lbliao/Code/ultralytics/runs/segment/yolo11-s/weights/best.pt')
 parser.add_argument('--data', type=str, default='/data2/lbliao/Code/ultralytics/segmentation/cfg/data/zendo-o.yaml')
 args = parser.parse_args()
 
@@ -19,7 +20,7 @@ args = parser.parse_args()
 model = YOLO(args.ckpt)
 
 # 评估测试集合
-# model.val(data=args.data, split='test')
+model.val(data=args.data, split='test')
 
 image_dir = "/NAS2/Data1/lbliao/Data/MXB/zenodo/dataset/a/images"  # 测试集路径
 label_dir = "/NAS2/Data1/lbliao/Data/MXB/zenodo/dataset/a/labels"  # 真实掩码路径
