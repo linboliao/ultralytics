@@ -1,7 +1,7 @@
 import argparse
-import os
 
 from ultralytics import YOLO
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--ckpt', type=str)
 parser.add_argument('--data', type=str)

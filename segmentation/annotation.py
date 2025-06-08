@@ -18,7 +18,7 @@ import traceback
 class YOLOConverter:
     """YOLO格式转换器的抽象基类"""
     SUPPORTED_FORMATS = ['.svs', '.kfb', '.tif', '.tiff', '.sdpc', '.ndpi', '.mrxs']
-    DATASET_RATIO = [0.7, 0.3, 0]
+    DATASET_RATIO = [0.7, 0.15, 0.15]
 
     def __init__(self, data_root, slide_dir, label_dir, output_dir, patch_size=512, patch_level=0):
         """
@@ -100,20 +100,20 @@ class YOLOConverter:
 # ====================== GeoJSON转换器 ======================
 class GeoJSONYOLOConverter(YOLOConverter):
     """处理GeoJSON标注的YOLO转换器"""
-    # CLASS_MAPPING = {
-    #     'benign': 0, 'tangential_benign': 0, 'gland': 0, 'stroma': 0,
-    #     'pattern3': 1, 'pattern4': 1, 'PIN': 1, 'malignant': 1, 'tangential_malignant': 1,
-    #     'blood_vessel': 2,
-    #     'artefact': 3
-    # }
-    CLASS_MAPPING = {'pattern3': 0,
-                     'pattern4': 1,
-                     'benign': 2,
-                     'tangential_benign': 3,
-                     'tangential_malignant': 4,
-                     'unknown': 5,
-                     'PIN': 6,
-                     'artefact': 7}
+    CLASS_MAPPING = {
+        'benign': 0, 'tangential_benign': 0, 'gland': 0, 'stroma': 0,
+        'pattern3': 1, 'pattern4': 1, 'PIN': 1, 'malignant': 1, 'tangential_malignant': 1,
+        'unknown': 2,
+        'artefact': 3
+    }
+    # CLASS_MAPPING = {'pattern3': 0,
+    #                  'pattern4': 1,
+    #                  'benign': 2,
+    #                  'tangential_benign': 3,
+    #                  'tangential_malignant': 4,
+    #                  'unknown': 5,
+    #                  'PIN': 6,
+    #                  'artefact': 7}
 
     GROUP_MAPPING = {
         'p3': 'pattern3', 'P3': 'pattern3', 'p4': 'pattern4', 'P4': 'pattern4',
@@ -142,10 +142,9 @@ class GeoJSONYOLOConverter(YOLOConverter):
                 coords = feature['geometry']['coordinates'][0]
                 class_name = feature.get('properties', {}).get('group', '')
                 class_name = self.GROUP_MAPPING.get(class_name, '')
-
                 if class_name:
                     annotations.append({
-                        'polygon': Polygon(coords),
+                        'polygon': make_valid(Polygon(coords)),
                         'class_name': class_name
                     })
         return annotations
@@ -184,6 +183,7 @@ class GeoJSONYOLOConverter(YOLOConverter):
                 patch_img = slide.read_region((x, y), 0, (self.patch_size, self.patch_size), True)
 
                 if not patch_img:
+                    logger.info(f'{slide_id} patch {x} {y} 为背景，跳过！')
                     skipped_count += 1
                     continue
 
@@ -202,7 +202,12 @@ class GeoJSONYOLOConverter(YOLOConverter):
 
                         if not intersection.is_empty:
                             has_labels = True
-                            polygons = [intersection] if intersection.geom_type == 'Polygon' else intersection.geoms
+                            if intersection.geom_type == 'Polygon':
+                                polygons = [intersection]
+                            elif intersection.geom_type == 'MultiPolygon':
+                                polygons = intersection.geoms
+                            else:
+                                continue
 
                             for poly in polygons:
                                 exterior = list(poly.exterior.coords)
