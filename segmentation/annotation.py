@@ -33,7 +33,7 @@ class YOLOConverter:
         self.data_root = Path(data_root)
         self.slide_dir = Path(slide_dir) if slide_dir else self.data_root / 'slides'
         self.label_dir = Path(label_dir) if label_dir else self.data_root / 'geojson'
-        self.output_dir = Path(output_dir) if output_dir else self.data_root / 'dataset-8'
+        self.output_dir = Path(output_dir) if output_dir else self.data_root / 'dataset'
         self.patch_size = patch_size
         self.patch_level = patch_level
         self.slide_files = []
@@ -140,13 +140,13 @@ class GeoJSONYOLOConverter(YOLOConverter):
         for feature in geojson_data['features']:
             if feature['geometry']['type'] == 'Polygon':
                 coords = feature['geometry']['coordinates'][0]
-                class_name = feature.get('properties', {}).get('group', '')
-                class_name = self.GROUP_MAPPING.get(class_name, '')
-                if class_name:
-                    annotations.append({
-                        'polygon': make_valid(Polygon(coords)),
-                        'class_name': class_name
-                    })
+                # class_name = feature.get('properties', {}).get('group', '')
+                # class_name = self.GROUP_MAPPING.get(class_name, '')
+                # if class_name:
+                annotations.append({
+                    'polygon': make_valid(Polygon(coords)),
+                    'class_name': 'seminal'
+                })
         return annotations
 
     def process_slide(self, slide_name, dataset_type="train"):
@@ -164,13 +164,17 @@ class GeoJSONYOLOConverter(YOLOConverter):
         # 读取切片
         try:
             slide = WSIOperator(str(slide_path))
-            width, height = slide.level_dimensions[0]
-            logger.info(f"载入切片成功 | 尺寸: {width}x{height}")
+            width, height = slide.level_dimensions[self.patch_level]
+            times = 2 ** self.patch_level
+            logger.info(f"载入切片成功 | 级别: {self.patch_level} | 尺寸: {width}x{height}")
         except Exception as e:
             logger.error(f"打开切片文件失败: {str(e)}")
             return
 
         # 解析标注
+        if not os.path.exists(geojson_path):
+            logger.info(f'{geojson_path}标注缺失，跳过！')
+            return
         annotations = self.parse_geojson(geojson_path)
 
         # 处理每个patch
@@ -179,8 +183,17 @@ class GeoJSONYOLOConverter(YOLOConverter):
 
         for y in range(0, height, self.patch_size):
             for x in range(0, width, self.patch_size):
-                patch_box = box(x, y, x + self.patch_size, y + self.patch_size)
-                patch_img = slide.read_region((x, y), 0, (self.patch_size, self.patch_size), True)
+                w = min(self.patch_size, width - x)
+                h = min(self.patch_size, height - y)
+
+                # 计算实际坐标范围
+                actual_x = x * times
+                actual_y = y * times
+                actual_w = w * times
+                actual_h = h * times
+                patch_box = box(actual_x, actual_y, actual_x + actual_w, actual_y + actual_h)
+
+                patch_img = slide.read_region((x, y), self.patch_level, (self.patch_size, self.patch_size), True)
 
                 if not patch_img:
                     logger.info(f'{slide_id} patch {x} {y} 为背景，跳过！')
@@ -216,11 +229,12 @@ class GeoJSONYOLOConverter(YOLOConverter):
                                 for pt in exterior:
                                     local_x = pt[0] - x
                                     local_y = pt[1] - y
-                                    norm_x = max(0.0, min(1.0, local_x / self.patch_size))
-                                    norm_y = max(0.0, min(1.0, local_y / self.patch_size))
+                                    norm_x = max(0.0, min(1.0, local_x / (w * times)))
+                                    norm_y = max(0.0, min(1.0, local_y / (h * times)))
                                     normalized_points.extend([norm_x, norm_y])
 
-                                clazz = self.CLASS_MAPPING.get(anno['class_name'], 3)
+                                # clazz = self.CLASS_MAPPING.get(anno['class_name'], 3)
+                                clazz = 0
                                 points_str = " ".join(f"{p:.6f}" for p in normalized_points)
                                 label_lines.append(f"{clazz} {points_str}")
 
@@ -352,12 +366,12 @@ class KVYOLOConverter(YOLOConverter):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/zenodo')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal')
 parser.add_argument('--slide_dir', type=str, default='')
 parser.add_argument('--label_dir', type=str, default='')
 parser.add_argument('--output_dir', type=str, default='')
-parser.add_argument('--patch_size', type=int, default=512)
-parser.add_argument('--patch_level', type=int, default=0)
+parser.add_argument('--patch_size', type=int, default=1024)
+parser.add_argument('--patch_level', type=int, default=2)
 parser.add_argument('--num_workers', type=int, default=None)
 parser.add_argument('--seed', type=int, default=42)
 
