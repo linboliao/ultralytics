@@ -140,13 +140,13 @@ class GeoJSONYOLOConverter(YOLOConverter):
         for feature in geojson_data['features']:
             if feature['geometry']['type'] == 'Polygon':
                 coords = feature['geometry']['coordinates'][0]
-                # class_name = feature.get('properties', {}).get('group', '')
-                # class_name = self.GROUP_MAPPING.get(class_name, '')
-                # if class_name:
-                annotations.append({
-                    'polygon': make_valid(Polygon(coords)),
-                    'class_name': 'seminal'
-                })
+                class_name = feature.get('properties', {}).get('group', '')
+                class_name = self.GROUP_MAPPING.get(class_name, '')
+                if class_name:
+                    annotations.append({
+                        'polygon': make_valid(Polygon(coords)),
+                        'class_name': class_name
+                    })
         return annotations
 
     def process_slide(self, slide_name, dataset_type="train"):
@@ -193,7 +193,7 @@ class GeoJSONYOLOConverter(YOLOConverter):
                 actual_h = h * times
                 patch_box = box(actual_x, actual_y, actual_x + actual_w, actual_y + actual_h)
 
-                patch_img = slide.read_region((x, y), self.patch_level, (self.patch_size, self.patch_size), True)
+                patch_img = slide.read_region((x, y), self.patch_level, (self.patch_size, self.patch_size))
 
                 if not patch_img:
                     logger.info(f'{slide_id} patch {x} {y} 为背景，跳过！')
@@ -227,10 +227,10 @@ class GeoJSONYOLOConverter(YOLOConverter):
                                 normalized_points = []
 
                                 for pt in exterior:
-                                    local_x = pt[0] - x
-                                    local_y = pt[1] - y
-                                    norm_x = max(0.0, min(1.0, local_x / (w * times)))
-                                    norm_y = max(0.0, min(1.0, local_y / (h * times)))
+                                    local_x = pt[0] - actual_x
+                                    local_y = pt[1] - actual_y
+                                    norm_x = max(0.0, min(1.0, local_x / actual_w))
+                                    norm_y = max(0.0, min(1.0, local_y / actual_h))
                                     normalized_points.extend([norm_x, norm_y])
 
                                 # clazz = self.CLASS_MAPPING.get(anno['class_name'], 3)
@@ -244,7 +244,7 @@ class GeoJSONYOLOConverter(YOLOConverter):
                                     draw.line([exterior[-1], exterior[0]], fill="red", width=2)
 
                 # 保存结果
-                if has_labels:
+                if has_labels or random.random() < 0.25:
                     img_name = f"{slide_id}_{x}_{y}.png"
                     rgb_img.save(image_dir / img_name)
 
@@ -340,10 +340,10 @@ class KVYOLOConverter(YOLOConverter):
                             normalized_points = []
 
                             for pt in exterior:
-                                local_x = pt[0] - x
-                                local_y = pt[1] - y
-                                norm_x = max(0.0, min(1.0, local_x / (w * times)))
-                                norm_y = max(0.0, min(1.0, local_y / (h * times)))
+                                local_x = pt[0] - actual_x
+                                local_y = pt[1] - actual_y
+                                norm_x = max(0.0, min(1.0, local_x / actual_w))
+                                norm_y = max(0.0, min(1.0, local_y / actual_h))
                                 normalized_points.extend([norm_x, norm_y])
 
                             clazz = self.LABELS.get(contours.get('color'), 0)
@@ -365,19 +365,138 @@ class KVYOLOConverter(YOLOConverter):
         logger.info(f"生成 {patch_count} 个patch | 轮廓数量: {len(contours)}")
 
 
+class MultiMagGeo2YOLO(GeoJSONYOLOConverter):
+    def process_slide(self, slide_name, dataset_type="train"):
+        """处理单个切片"""
+        slide_path = self.slide_dir / slide_name
+        slide_id = Path(slide_path).stem
+        geojson_path = self.label_dir / f"{slide_id}.geojson"
+        image_dir = self.output_dir / dataset_type / 'images'
+        low_image_dir = self.output_dir / dataset_type / 'images_low'
+        high_image_dir = self.output_dir / dataset_type / 'images_high'
+        label_dir = self.output_dir / dataset_type / 'labels'
+        contour_dir = self.output_dir / dataset_type / 'contours'
+        os.makedirs(image_dir, exist_ok=True)
+        os.makedirs(high_image_dir, exist_ok=True)
+        os.makedirs(low_image_dir, exist_ok=True)
+        os.makedirs(label_dir, exist_ok=True)
+        os.makedirs(contour_dir, exist_ok=True)
+
+        # 读取切片
+        try:
+            slide = WSIOperator(str(slide_path))
+            width, height = slide.level_dimensions[self.patch_level]
+            times = 2 ** self.patch_level
+            logger.info(f"载入切片成功 | 级别: {self.patch_level} | 尺寸: {width}x{height}")
+        except Exception as e:
+            logger.error(f"打开切片文件失败: {str(e)}")
+            return
+
+        # 解析标注
+        if not os.path.exists(geojson_path):
+            logger.info(f'{geojson_path}标注缺失，跳过！')
+            return
+        annotations = self.parse_geojson(geojson_path)
+
+        # 处理每个patch
+        patch_count = 0
+        skipped_count = 0
+
+        for y in range(0, height, self.patch_size):
+            for x in range(0, width, self.patch_size):
+                w = min(self.patch_size, width - x)
+                h = min(self.patch_size, height - y)
+
+                # 计算实际坐标范围
+                actual_x = x * times
+                actual_y = y * times
+                actual_w = w * times
+                actual_h = h * times
+                patch_box = box(actual_x, actual_y, actual_x + actual_w, actual_y + actual_h)
+
+                patch_img = slide.read_region((x, y), self.patch_level, (self.patch_size, self.patch_size), True)
+
+                if not patch_img:
+                    logger.info(f'{slide_id} patch {x} {y} 为背景，跳过！')
+                    skipped_count += 1
+                    continue
+
+                rgb_img = patch_img.convert("RGB")
+                label_lines = []
+                has_labels = False
+
+                # 创建轮廓图像
+                contour_img = rgb_img.copy()
+                draw = ImageDraw.Draw(contour_img)
+
+                # 处理标注
+                for anno in annotations:
+                    if patch_box.intersects(anno['polygon']):
+                        intersection = patch_box.intersection(anno['polygon'])
+
+                        if not intersection.is_empty:
+                            has_labels = True
+                            if intersection.geom_type == 'Polygon':
+                                polygons = [intersection]
+                            elif intersection.geom_type == 'MultiPolygon':
+                                polygons = intersection.geoms
+                            else:
+                                continue
+
+                            for poly in polygons:
+                                exterior = list(poly.exterior.coords)
+                                normalized_points = []
+
+                                for pt in exterior:
+                                    local_x = pt[0] - actual_x
+                                    local_y = pt[1] - actual_y
+                                    norm_x = max(0.0, min(1.0, local_x / actual_w))
+                                    norm_y = max(0.0, min(1.0, local_y / actual_h))
+                                    normalized_points.extend([norm_x, norm_y])
+
+                                clazz = self.CLASS_MAPPING.get(anno['class_name'], 3)
+                                points_str = " ".join(f"{p:.6f}" for p in normalized_points)
+                                label_lines.append(f"{clazz} {points_str}")
+
+                                # 绘制轮廓
+                                draw.line(exterior, fill="red", width=5)
+                                if len(exterior) > 1:
+                                    draw.line([exterior[-1], exterior[0]], fill="red", width=2)
+
+                # 保存结果
+                if has_labels:
+                    img_name = f"{slide_id}_{x}_{y}.png"
+                    rgb_img.save(image_dir / img_name)
+                    img_low = slide.read_region((w + int(self.patch_size * 0.25), h + int(self.patch_size * 0.25)), 0, (int(self.patch_size * 0.5), int(self.patch_size * 0.5)))
+                    img_high = slide.read_region((w - int(self.patch_size * 0.25), h - int(self.patch_size * 0.25)), 0, (int(self.patch_size * 1.5), int(self.patch_size * 1.5)))
+                    img_low.save(low_image_dir / img_name)
+                    img_high.save(high_image_dir / img_name)
+                    txt_name = f"{slide_id}_{x}_{y}.txt"
+                    with open(label_dir / txt_name, 'w') as f:
+                        f.write("\n".join(label_lines))
+
+                    contour_img.save(contour_dir / img_name)
+                    patch_count += 1
+                else:
+                    skipped_count += 1
+
+        logger.info(f"处理完成! 有效patch: {patch_count} | 跳过无标签patch: {skipped_count}")
+
+
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/zenodo')
 parser.add_argument('--slide_dir', type=str, default='')
 parser.add_argument('--label_dir', type=str, default='')
-parser.add_argument('--output_dir', type=str, default='')
-parser.add_argument('--patch_size', type=int, default=1024)
-parser.add_argument('--patch_level', type=int, default=2)
-parser.add_argument('--num_workers', type=int, default=None)
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/zenodo/dataset/MM')
+parser.add_argument('--patch_size', type=int, default=640)
+parser.add_argument('--patch_level', type=int, default=0)
+parser.add_argument('--num_workers', type=int, default=40)
 parser.add_argument('--seed', type=int, default=42)
 
 args = parser.parse_args()
 
 if __name__ == '__main__':
-    converter = GeoJSONYOLOConverter(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
+    # converter = GeoJSONYOLOConverter(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
+    converter = MultiMagGeo2YOLO(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
     # converter = KVYOLOConverter(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
     converter.run(num_workers=args.num_workers)
