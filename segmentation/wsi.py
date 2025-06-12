@@ -43,7 +43,7 @@ class WSIOperator(openslide.OpenSlide):
     def read_region(self, location, level, size, check_background=False):
         """统一区域读取接口"""
         img = self.wsi.read_region(location, level, size)
-        if check_background and is_background(img):
+        if check_background and is_background(img) and random.random() < 0.75:
             return None
         if isinstance(img, np.ndarray):
             return Image.fromarray(img)

@@ -3,15 +3,14 @@ import json
 import re
 import uuid
 from pathlib import Path
+
+import cv2
 from tqdm import tqdm
 from loguru import logger
 
 from segmentation.wsi import WSIOperator
 from ultralytics import YOLO
-from geojson import Polygon, Feature, FeatureCollection
 
-import json
-import uuid
 import numpy as np
 from geojson import Polygon, Feature, FeatureCollection
 
@@ -27,7 +26,6 @@ def yolo_seg_to_geojson(results, offsets):
 
     for result in results:
         # 解析文件名中的偏移量
-        filename = Path(result.path).name
         w_offset, h_offset = offsets
         if not result.masks:
             return None
@@ -36,26 +34,39 @@ def yolo_seg_to_geojson(results, offsets):
             class_id = int(result.boxes.cls[i])
             class_name = result.names[class_id]
             conf = float(result.boxes.conf[i])
+            points = np.array(mask, np.int32)
+            mask_img = np.zeros((2048, 2048), dtype=np.uint8)  # 创建空白画布
+            cv2.fillPoly(mask_img, [points], color=255)  # 填充多边形区域
+            # 从 Method 1 的 mask_img 中提取轮廓
+            kernel_size = (2, 2)  # 根据连接点宽度调整
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, kernel_size)
+            eroded = cv2.erode(mask_img, kernel, iterations=1)  # 腐蚀断开连接点
+            dilated = cv2.dilate(eroded, kernel, iterations=1)  # 恢复主体形状
+            contours, hierarchy = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
             # 坐标转换：局部坐标 → 全局坐标
-            global_coords = [[x * 4 + w_offset, y * 4 + h_offset] for point in mask for x, y in [point]]
+            for contour in contours:
+                if cv2.contourArea(contour) < 2048*2048 / 20:
+                    continue
+                coords = contour.squeeze().tolist()
+                global_coords = [[x * 4 + w_offset, y * 4 + h_offset] for point in coords for x, y in [point]]
 
-            # 确保多边形闭合
-            if global_coords[0] != global_coords[-1]:
-                global_coords.append(global_coords[0])
+                # 确保多边形闭合
+                if global_coords[0] != global_coords[-1]:
+                    global_coords.append(global_coords[0])
 
-            # 创建GeoJSON特征
-            features.append(Feature(
-                id=str(uuid.uuid4()),
-                geometry=Polygon([global_coords]),
-                properties={
-                    "objectType": "annotation",
-                    "classification": {
-                        "name": class_name,
-                        "color": [0, 255, 0]
+                # 创建GeoJSON特征
+                features.append(Feature(
+                    id=str(uuid.uuid4()),
+                    geometry=Polygon([global_coords]),
+                    properties={
+                        "objectType": "annotation",
+                        "classification": {
+                            "name": class_name,
+                            "color": [0, 255, 0]
+                        }
                     }
-                }
-            ))
+                ))
 
     return FeatureCollection(features)
 
@@ -96,7 +107,7 @@ def process_svs_to_geojson(slide_path, model, level, patch_size, output_path):
             patch_rgb = patch.convert("RGB")
 
             # 推理并转换坐标
-            results = model(patch_rgb, iou=0.6, conf=0.4)
+            results = model(patch_rgb, iou=0.7, conf=0.2)
             # for i, result in enumerate(results):
             #     result.save(filename=f"{slide_id}_{x}_{y}_{i}.jpg")  # save to disk
             features = yolo_seg_to_geojson(results, (base_x, base_y))
@@ -112,19 +123,19 @@ def process_svs_to_geojson(slide_path, model, level, patch_size, output_path):
 
 if __name__ == "__main__":
     # 初始化模型
-    model = YOLO("/NAS3/lbliao/Code/ultralytics/runs/segment/seminal/weights/best.pt")
+    model = YOLO("/data2/lbliao/Code/ultralytics/runs/segment/seminal-2048/weights/best.pt")
 
     # 处理SVS文件
-    slide_dir = f'/NAS3/lbliao/Data/MXB/seminal/slides/'
+    slide_dir = f'/NAS2/Data1/lbliao/Data/MXB/seminal/slides/'
     for slide in os.listdir(slide_dir):
         slide_id = os.path.splitext(slide)[0]
-        label_path = f'/NAS3/lbliao/Data/MXB/seminal/geojson/{slide_id}.geojson'
+        label_path = f'/NAS2/Data1/lbliao/Data/MXB/seminal/geojson/{slide_id}.geojson'
         if os.path.exists(label_path):
             continue
         process_svs_to_geojson(
-            slide_path=f"/NAS3/lbliao/Data/MXB/seminal/slides/{slide}",
+            slide_path=f"/NAS2/Data1/lbliao/Data/MXB/seminal/slides/{slide}",
             model=model,
             level=2,
-            patch_size=(1024, 1024),
+            patch_size=(2048, 2048),
             output_path=f"{slide_id}.geojson"
         )

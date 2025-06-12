@@ -18,7 +18,7 @@ import traceback
 class YOLOConverter:
     """YOLO格式转换器的抽象基类"""
     SUPPORTED_FORMATS = ['.svs', '.kfb', '.tif', '.tiff', '.sdpc', '.ndpi', '.mrxs']
-    DATASET_RATIO = [0.7, 0.15, 0.15]
+    DATASET_RATIO = [0.85, 0.15, 0]
 
     def __init__(self, data_root, slide_dir, label_dir, output_dir, patch_size=512, patch_level=0):
         """
@@ -100,13 +100,13 @@ class YOLOConverter:
 # ====================== GeoJSON转换器 ======================
 class GeoJSONYOLOConverter(YOLOConverter):
     """处理GeoJSON标注的YOLO转换器"""
-    CLASS_MAPPING = {
-        'benign': 0, 'tangential_benign': 0, 'gland': 0, 'stroma': 0,
-        'pattern3': 1, 'pattern4': 1, 'PIN': 1, 'malignant': 1, 'tangential_malignant': 1,
-        'unknown': 2,
-        'artefact': 3
-    }
-    # CLASS_MAPPING = {'pattern3': 0,
+    # CLASS_MAPPING = {
+    #     'benign': 0, 'tangential_benign': 0, 'gland': 0, 'stroma': 0,
+    #     'pattern3': 1, 'pattern4': 1, 'PIN': 1, 'malignant': 1, 'tangential_malignant': 1,
+    #     'unknown': 2,
+    #     'artefact': 3
+    # }
+    # # CLASS_MAPPING = {'pattern3': 0,
     #                  'pattern4': 1,
     #                  'benign': 2,
     #                  'tangential_benign': 3,
@@ -115,15 +115,20 @@ class GeoJSONYOLOConverter(YOLOConverter):
     #                  'PIN': 6,
     #                  'artefact': 7}
 
-    GROUP_MAPPING = {
-        'p3': 'pattern3', 'P3': 'pattern3', 'p4': 'pattern4', 'P4': 'pattern4',
-        'b': 'benign', 'B': 'benign', 'tangential_benign': 'tangential_benign',
-        'tangential_malignant': 'tangential_malignant', 'pattern3': 'pattern3',
-        'pattern4': 'pattern4', 'benign': 'benign', 'unknown': 'unknown',
-        'PIN': 'PIN', 'artefact': 'artefact', 'artifact': 'artefact',
-        'Artefact': 'artefact', 't': 'tangential_benign', 'tangential': 'tangential_benign'
-    }
+    # GROUP_MAPPING = {
+    #     'p3': 'pattern3', 'P3': 'pattern3', 'p4': 'pattern4', 'P4': 'pattern4',
+    #     'b': 'benign', 'B': 'benign', 'tangential_benign': 'tangential_benign',
+    #     'tangential_malignant': 'tangential_malignant', 'pattern3': 'pattern3',
+    #     'pattern4': 'pattern4', 'benign': 'benign', 'unknown': 'unknown',
+    #     'PIN': 'PIN', 'artefact': 'artefact', 'artifact': 'artefact',
+    #     'Artefact': 'artefact', 't': 'tangential_benign', 'tangential': 'tangential_benign'
+    # }
 
+    CLASS_MAPPING = {
+        'Negative': 0,
+        'Positive': 1,
+        'Other': 2,
+    }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # 保存类别映射文件
@@ -140,9 +145,9 @@ class GeoJSONYOLOConverter(YOLOConverter):
         for feature in geojson_data['features']:
             if feature['geometry']['type'] == 'Polygon':
                 coords = feature['geometry']['coordinates'][0]
-                class_name = feature.get('properties', {}).get('group', '')
-                class_name = self.GROUP_MAPPING.get(class_name, '')
-                if class_name:
+                class_name = feature.get('properties', {}).get('classification', {}).get('name', 'Positive')
+                # class_name = self.GROUP_MAPPING.get(class_name, '')
+                if class_name and class_name != 'Other':
                     annotations.append({
                         'polygon': make_valid(Polygon(coords)),
                         'class_name': class_name
@@ -166,7 +171,7 @@ class GeoJSONYOLOConverter(YOLOConverter):
             slide = WSIOperator(str(slide_path))
             width, height = slide.level_dimensions[self.patch_level]
             times = 2 ** self.patch_level
-            logger.info(f"载入切片成功 | 级别: {self.patch_level} | 尺寸: {width}x{height}")
+            logger.info(f"载入切片 {slide_name} 成功 | 级别: {self.patch_level} | 尺寸: {width}x{height}")
         except Exception as e:
             logger.error(f"打开切片文件失败: {str(e)}")
             return
@@ -204,9 +209,9 @@ class GeoJSONYOLOConverter(YOLOConverter):
                 label_lines = []
                 has_labels = False
 
-                # 创建轮廓图像
-                contour_img = rgb_img.copy()
-                draw = ImageDraw.Draw(contour_img)
+                # # 创建轮廓图像
+                # contour_img = rgb_img.copy()
+                # draw = ImageDraw.Draw(contour_img)
 
                 # 处理标注
                 for anno in annotations:
@@ -233,15 +238,15 @@ class GeoJSONYOLOConverter(YOLOConverter):
                                     norm_y = max(0.0, min(1.0, local_y / actual_h))
                                     normalized_points.extend([norm_x, norm_y])
 
-                                # clazz = self.CLASS_MAPPING.get(anno['class_name'], 3)
-                                clazz = 0
+                                clazz = self.CLASS_MAPPING.get(anno['class_name'], 0)
+                                # clazz = 0
                                 points_str = " ".join(f"{p:.6f}" for p in normalized_points)
                                 label_lines.append(f"{clazz} {points_str}")
 
-                                # 绘制轮廓
-                                draw.line(exterior, fill="red", width=5)
-                                if len(exterior) > 1:
-                                    draw.line([exterior[-1], exterior[0]], fill="red", width=2)
+                                # # 绘制轮廓
+                                # draw.line(exterior, fill="red", width=5)
+                                # if len(exterior) > 1:
+                                #     draw.line([exterior[-1], exterior[0]], fill="red", width=2)
 
                 # 保存结果
                 if has_labels or random.random() < 0.25:
@@ -252,7 +257,7 @@ class GeoJSONYOLOConverter(YOLOConverter):
                     with open(label_dir / txt_name, 'w') as f:
                         f.write("\n".join(label_lines))
 
-                    contour_img.save(contour_dir / img_name)
+                    # contour_img.save(contour_dir / img_name)
                     patch_count += 1
                 else:
                     skipped_count += 1
@@ -263,22 +268,20 @@ class GeoJSONYOLOConverter(YOLOConverter):
 # ====================== KVJSON转换器 ======================
 class KVYOLOConverter(YOLOConverter):
     """处理KV格式JSON标注的YOLO转换器"""
-    LABELS = {
-
-    }
+    LABELS = {4278255615: 0, 4294901760: 1, 4278190080: 2, 4278251008: 1}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-    def parse_kvjson(self, json_path):
-        """解析KV格式JSON文件"""
 
     def process_slide(self, slide_name, dataset_type="train"):
         """处理单个切片"""
         slide_path = self.slide_dir / slide_name
         slide_id = Path(slide_path).stem
-        json_path = self.label_dir / f"{slide_id}.json"
-
+        # json_path = self.label_dir / f"{slide_id}.json"
+        json_path = self.label_dir / slide_name.replace('.', '_') / "Annotations" / "1.json"
+        if not os.path.exists(json_path):
+            logger.info(f'{slide_name}标注缺失，跳过！')
+            return
         image_dir = self.output_dir / dataset_type / 'images'
         label_dir = self.output_dir / dataset_type / 'labels'
         contour_dir = self.output_dir / dataset_type / 'contours'
@@ -291,7 +294,7 @@ class KVYOLOConverter(YOLOConverter):
             slide = WSIOperator(str(slide_path))
             width, height = slide.level_dimensions[self.patch_level]
             times = 2 ** self.patch_level
-            logger.info(f"载入切片成功 | 级别: {self.patch_level} | 尺寸: {width}x{height}")
+            logger.info(f"载入切片 {slide_name} 成功 | 级别: {self.patch_level} | 尺寸: {width}x{height}")
         except Exception as e:
             logger.error(f"打开切片文件失败: {str(e)}")
             return
@@ -307,6 +310,12 @@ class KVYOLOConverter(YOLOConverter):
             for x in range(0, width, self.patch_size):
                 w = min(self.patch_size, width - x)
                 h = min(self.patch_size, height - y)
+                # 保存图像块
+                patch = slide.read_region((x, y), self.patch_level, (w, h), True)
+                if not patch:
+                    logger.info(f'{slide_id} patch {x} {y} 为背景，跳过！')
+                    continue
+                patch = patch.convert("RGB")
 
                 # 计算实际坐标范围
                 actual_x = x * times
@@ -321,7 +330,7 @@ class KVYOLOConverter(YOLOConverter):
                 # 生成标签
                 for contour in contours:
                     points = [(p["x"], p["y"]) for p in contour.get("points", [])]
-                    if not points:
+                    if not points or len(points) < 3:
                         continue
 
                     # 闭合多边形
@@ -345,17 +354,19 @@ class KVYOLOConverter(YOLOConverter):
                                 norm_x = max(0.0, min(1.0, local_x / actual_w))
                                 norm_y = max(0.0, min(1.0, local_y / actual_h))
                                 normalized_points.extend([norm_x, norm_y])
-
+                            color = contours.get('color')
+                            if color == 4294967040:
+                                logger.info(f'神经节侵犯标签，跳过！')
+                                continue
                             clazz = self.LABELS.get(contours.get('color'), 0)
                             points_str = " ".join(f"{p:.6f}" for p in normalized_points)
                             label_lines.append(f"{clazz} {points_str}")
-                # 保存图像块
-                patch = slide.read_region((x, y), self.patch_level, (w, h)).convert("RGB")
+
                 img_name = f"{slide_id}_{x}_{y}.jpg"
                 patch.save(image_dir / img_name)
 
                 # 保存结果
-                if has_labels:
+                if has_labels or random.random() < 0.25:
                     txt_name = f"{slide_id}_{x}_{y}.txt"
                     with open(label_dir / txt_name, 'w') as f:
                         f.write("\n".join(label_lines))
@@ -484,11 +495,11 @@ class MultiMagGeo2YOLO(GeoJSONYOLOConverter):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/zenodo')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425')
 parser.add_argument('--slide_dir', type=str, default='')
 parser.add_argument('--label_dir', type=str, default='')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/zenodo/dataset/MM')
-parser.add_argument('--patch_size', type=int, default=640)
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/dataset/0611')
+parser.add_argument('--patch_size', type=int, default=2048)
 parser.add_argument('--patch_level', type=int, default=0)
 parser.add_argument('--num_workers', type=int, default=40)
 parser.add_argument('--seed', type=int, default=42)
@@ -496,7 +507,7 @@ parser.add_argument('--seed', type=int, default=42)
 args = parser.parse_args()
 
 if __name__ == '__main__':
-    # converter = GeoJSONYOLOConverter(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
-    converter = MultiMagGeo2YOLO(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
+    converter = GeoJSONYOLOConverter(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
+    # converter = MultiMagGeo2YOLO(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
     # converter = KVYOLOConverter(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
     converter.run(num_workers=args.num_workers)
