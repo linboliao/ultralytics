@@ -5,6 +5,9 @@ import os
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+import cv2
+import numpy as np
 from PIL import ImageDraw
 from shapely.geometry import Polygon, box
 from shapely.validation import make_valid
@@ -129,6 +132,7 @@ class GeoJSONYOLOConverter(YOLOConverter):
         'Positive': 1,
         'Other': 2,
     }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # 保存类别映射文件
@@ -178,7 +182,8 @@ class GeoJSONYOLOConverter(YOLOConverter):
 
         # 解析标注
         if not os.path.exists(geojson_path):
-            logger.info(f'{geojson_path}标注缺失，跳过！')
+            os.remove(slide_path)
+            logger.info(f'{geojson_path}标注缺失，跳过！删除对应slide')
             return
         annotations = self.parse_geojson(geojson_path)
 
@@ -198,7 +203,7 @@ class GeoJSONYOLOConverter(YOLOConverter):
                 actual_h = h * times
                 patch_box = box(actual_x, actual_y, actual_x + actual_w, actual_y + actual_h)
 
-                patch_img = slide.read_region((x, y), self.patch_level, (self.patch_size, self.patch_size))
+                patch_img = slide.read_region((x, y), self.patch_level, (self.patch_size, self.patch_size), check_background=True)
 
                 if not patch_img:
                     logger.info(f'{slide_id} patch {x} {y} 为背景，跳过！')
@@ -210,43 +215,39 @@ class GeoJSONYOLOConverter(YOLOConverter):
                 has_labels = False
 
                 # # 创建轮廓图像
-                # contour_img = rgb_img.copy()
-                # draw = ImageDraw.Draw(contour_img)
+                contour_img = patch_img.copy()
+                contour_img = np.array(contour_img)
+                contour_img = cv2.cvtColor(contour_img, cv2.COLOR_RGB2BGR)
 
                 # 处理标注
                 for anno in annotations:
-                    if patch_box.intersects(anno['polygon']):
-                        intersection = patch_box.intersection(anno['polygon'])
+                    intersection = patch_box.intersection(anno['polygon'])
 
-                        if not intersection.is_empty:
-                            has_labels = True
-                            if intersection.geom_type == 'Polygon':
-                                polygons = [intersection]
-                            elif intersection.geom_type == 'MultiPolygon':
-                                polygons = intersection.geoms
-                            else:
-                                continue
+                    if not intersection.is_empty:
+                        has_labels = True
+                        if intersection.geom_type == 'Polygon':
+                            polygons = [intersection]
+                        elif intersection.geom_type == 'MultiPolygon':
+                            polygons = intersection.geoms
+                        else:
+                            continue
 
-                            for poly in polygons:
-                                exterior = list(poly.exterior.coords)
-                                normalized_points = []
+                        for poly in polygons:
+                            exterior = list(poly.exterior.coords)
+                            normalized_points = []
+                            points = [[pt[0] - actual_x, pt[1] - actual_y] for pt in exterior]
+                            for pt in points:
+                                norm_x = max(0.0, min(1.0, pt[0] / actual_w))
+                                norm_y = max(0.0, min(1.0, pt[1] / actual_h))
+                                normalized_points.extend([norm_x, norm_y])
 
-                                for pt in exterior:
-                                    local_x = pt[0] - actual_x
-                                    local_y = pt[1] - actual_y
-                                    norm_x = max(0.0, min(1.0, local_x / actual_w))
-                                    norm_y = max(0.0, min(1.0, local_y / actual_h))
-                                    normalized_points.extend([norm_x, norm_y])
+                            clazz = self.CLASS_MAPPING.get(anno['class_name'], 0)
+                            points_str = " ".join(f"{p:.6f}" for p in normalized_points)
+                            label_lines.append(f"{clazz} {points_str}")
+                            points = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
 
-                                clazz = self.CLASS_MAPPING.get(anno['class_name'], 0)
-                                # clazz = 0
-                                points_str = " ".join(f"{p:.6f}" for p in normalized_points)
-                                label_lines.append(f"{clazz} {points_str}")
-
-                                # # 绘制轮廓
-                                # draw.line(exterior, fill="red", width=5)
-                                # if len(exterior) > 1:
-                                #     draw.line([exterior[-1], exterior[0]], fill="red", width=2)
+                            # 绘制轮廓
+                            cv2.polylines(contour_img, [points], isClosed=True, color=(0, 255, 0), thickness=5)
 
                 # 保存结果
                 if has_labels or random.random() < 0.25:
@@ -257,7 +258,7 @@ class GeoJSONYOLOConverter(YOLOConverter):
                     with open(label_dir / txt_name, 'w') as f:
                         f.write("\n".join(label_lines))
 
-                    # contour_img.save(contour_dir / img_name)
+                    cv2.imwrite(Path(contour_dir / img_name), contour_img)
                     patch_count += 1
                 else:
                     skipped_count += 1
@@ -495,10 +496,10 @@ class MultiMagGeo2YOLO(GeoJSONYOLOConverter):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment')
 parser.add_argument('--slide_dir', type=str, default='')
 parser.add_argument('--label_dir', type=str, default='')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/dataset/0611')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/dataset/2048')
 parser.add_argument('--patch_size', type=int, default=2048)
 parser.add_argument('--patch_level', type=int, default=0)
 parser.add_argument('--num_workers', type=int, default=40)
