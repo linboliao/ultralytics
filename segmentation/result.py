@@ -87,7 +87,7 @@ class Result:
             self.process(slide)
 
     def parallel_run(self):
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(self.process, slide) for slide in self.slides]
             for future in as_completed(futures):
                 try:
@@ -280,13 +280,14 @@ class GeoResults(Result):
                 "id": str(uuid.uuid4()),  # 生成唯一 ID
                 "geometry": {"type": "Polygon", "coordinates": coord},  # 填充坐标
                 "properties": {
+                    "name": f'{conf:.4f}',
                     "classification": {
                         "name": label,
                         "color": self.color_dict[label]  # 填充颜色
                     }
                 }
             }
-            for coord, label in zip(coords, labels)
+            for coord, label, conf in zip(coords, labels, confs)
         ]
 
         geojson = {
