@@ -22,7 +22,23 @@ sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
 from aslide import Aslide
 
 MIN_AREA = 3000
+CLASS_MAPPING = {'pattern3': 0,
+                 'pattern4': 1,
+                 'benign': 2,
+                 'tangential_benign': 3,
+                 'tangential_malignant': 4,
+                 'unknown': 5,
+                 'PIN': 6,
+                 'artefact': 7}
 
+GROUP_MAPPING = {
+    'p3': 'pattern3', 'P3': 'pattern3', 'p4': 'pattern4', 'P4': 'pattern4',
+    'b': 'benign', 'B': 'benign', 'tangential_benign': 'tangential_benign',
+    'tangential_malignant': 'tangential_malignant', 'pattern3': 'pattern3',
+    'pattern4': 'pattern4', 'benign': 'benign', 'unknown': 'unknown',
+    'PIN': 'PIN', 'artefact': 'artefact', 'artifact': 'artefact',
+    'Artefact': 'artefact', 't': 'tangential_benign', 'tangential': 'tangential_benign'
+}
 
 def is_background(img, threshold=5):
     img_array = np.array(img)
@@ -268,6 +284,8 @@ class GeoAnnotation(Annotation):
                             # else:
                             #     clazz = 1
                             group = feature.get('properties', {}).get('group', '')
+                            class_name = GROUP_MAPPING.get(group, '')
+                            clazz = CLASS_MAPPING.get(class_name, )
                             if group == 'benign' or group == 'tangential_benign' or group == 'gland' or group == 'stroma':
                                 clazz = 0
                             elif group == 'pattern3' or group == 'pattern4' or group == 'PIN' or group== 'malignant' or group == 'tangential_malignant':
