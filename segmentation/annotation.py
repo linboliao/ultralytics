@@ -22,14 +22,11 @@ sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
 from aslide import Aslide
 
 MIN_AREA = 3000
-CLASS_MAPPING = {'pattern3': 0,
-                 'pattern4': 1,
-                 'benign': 2,
-                 'tangential_benign': 3,
-                 'tangential_malignant': 4,
-                 'unknown': 5,
-                 'PIN': 6,
-                 'artefact': 7}
+CLASS_MAPPING = {
+    'benign': 0, 'tangential_benign': 0, 'gland': 0, 'stroma': 0,
+    'pattern3': 1, 'pattern4': 1, 'PIN': 1, 'malignant': 1, 'tangential_malignant': 1,
+    # 'unknown': 2,
+    'artefact': 2}
 
 GROUP_MAPPING = {
     'p3': 'pattern3', 'P3': 'pattern3', 'p4': 'pattern4', 'P4': 'pattern4',
@@ -39,6 +36,7 @@ GROUP_MAPPING = {
     'PIN': 'PIN', 'artefact': 'artefact', 'artifact': 'artefact',
     'Artefact': 'artefact', 't': 'tangential_benign', 'tangential': 'tangential_benign'
 }
+
 
 def is_background(img, threshold=5):
     img_array = np.array(img)
@@ -286,14 +284,14 @@ class GeoAnnotation(Annotation):
                             group = feature.get('properties', {}).get('group', '')
                             class_name = GROUP_MAPPING.get(group, '')
                             clazz = CLASS_MAPPING.get(class_name, )
-                            if group == 'benign' or group == 'tangential_benign' or group == 'gland' or group == 'stroma':
-                                clazz = 0
-                            elif group == 'pattern3' or group == 'pattern4' or group == 'PIN' or group== 'malignant' or group == 'tangential_malignant':
-                                clazz = 1
-                            elif group == 'blood_vessel':
-                                clazz = 2
-                            else:
-                                clazz = 3
+                            # if group == 'benign' or group == 'tangential_benign' or group == 'gland' or group == 'stroma':
+                            #     clazz = 0
+                            # elif group == 'pattern3' or group == 'pattern4' or group == 'PIN' or group == 'malignant' or group == 'tangential_malignant':
+                            #     clazz = 1
+                            # elif group == 'blood_vessel':
+                            #     clazz = 2
+                            # else:
+                            #     clazz = 3
                             # elif group == 'unknown' or group == 'artefact' or group == 'unknown_checked' or group == 'unknown_fp' or group == 'ignored' or group == 'unidentified' or group == 'others':
                             #     clazz = 3
                             line = f'{clazz} {contours_str}'
@@ -632,7 +630,7 @@ parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/dataset/2048', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/zenodo/dataset/2048-X', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=2048, help='output size')
