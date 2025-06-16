@@ -1,5 +1,8 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "6"      # 单卡：仅GPU 0可见
+
+import pandas as pd
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import cv2
 import numpy as np
 import argparse
@@ -12,8 +15,8 @@ from tqdm import tqdm
 from ultralytics import YOLO
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--ckpt', type=str, default='/data2/lbliao/Code/ultralytics/runs/segment/yolo11-s/weights/best.pt')
-parser.add_argument('--data', type=str, default='/data2/lbliao/Code/ultralytics/segmentation/cfg/data/zendo-o.yaml')
+parser.add_argument('--ckpt', type=str, default='/data2/lbliao/Code/ultralytics/runs/segment/train5/weights/best.pt')
+parser.add_argument('--data', type=str, default='/data2/lbliao/Code/ultralytics/segmentation/cfg/data/segment.yaml')
 args = parser.parse_args()
 
 # Load a model
@@ -22,8 +25,8 @@ model = YOLO(args.ckpt)
 # 评估测试集合
 model.val(data=args.data, split='test')
 
-image_dir = "/NAS2/Data1/lbliao/Data/MXB/zenodo/dataset/a/images"  # 测试集路径
-label_dir = "/NAS2/Data1/lbliao/Data/MXB/zenodo/dataset/a/labels"  # 真实掩码路径
+image_dir = "/NAS2/Data1/lbliao/Data/MXB/segment/dataset/2048/test/images"  # 测试集路径
+label_dir = "/NAS2/Data1/lbliao/Data/MXB/segment/dataset/2048/test/labels"  # 真实掩码路径
 
 
 def yolo2mask(label_path, img_size=(512, 512), num_classes=None):
@@ -95,6 +98,7 @@ def calculate(images_dir, labels_dir, num_classes):
         # 加载图像获取尺寸
         img_path = os.path.join(images_dir, img_name)
         img = cv2.imread(img_path)
+        img = cv2.resize(img, (896, 896))
         h, w = img.shape[:2]
 
         # 生成真实掩码
@@ -120,8 +124,8 @@ def calculate(images_dir, labels_dir, num_classes):
         result = multi_class_metrics(true_mask, pred_mask)
         iou_scores.append(result.get('iou'))
         dice_scores.append(result.get('dice'))
-    print(iou_scores)
-    print(dice_scores)
+    iou_scores = pd.Series(iou_scores).dropna().tolist()
+    dice_scores = pd.Series(dice_scores).dropna().tolist()
     return {'dice': np.mean(dice_scores), 'iou': np.mean(iou_scores)}
 
 

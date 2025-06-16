@@ -128,8 +128,10 @@ class GeoJSONYOLOConverter(YOLOConverter):
     # }
 
     CLASS_MAPPING = {
+        'no-cancer': 0,
         'Negative': 0,
         'Positive': 1,
+        'Tumor': 1,
         'Other': 2,
     }
 
@@ -203,10 +205,10 @@ class GeoJSONYOLOConverter(YOLOConverter):
                 actual_h = h * times
                 patch_box = box(actual_x, actual_y, actual_x + actual_w, actual_y + actual_h)
 
-                patch_img = slide.read_region((x, y), self.patch_level, (self.patch_size, self.patch_size), check_background=True)
+                patch_img = slide.read_region((x, y), self.patch_level, (w, h), check_background=True)
 
                 if not patch_img:
-                    logger.info(f'{slide_id} patch {x} {y} 为背景，跳过！')
+                    # logger.info(f'{slide_id} patch {x} {y} 为背景，跳过！')
                     skipped_count += 1
                     continue
 
@@ -247,10 +249,11 @@ class GeoJSONYOLOConverter(YOLOConverter):
                             points = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
 
                             # 绘制轮廓
-                            cv2.polylines(contour_img, [points], isClosed=True, color=(0, 255, 0), thickness=5)
+                            color = (0,255,0) if clazz == 0 else (255,0,0)
+                            cv2.polylines(contour_img, [points], isClosed=True, color=color, thickness=5)
 
                 # 保存结果
-                if has_labels or random.random() < 0.25:
+                if has_labels or random.random() < 0.5:
                     img_name = f"{slide_id}_{x}_{y}.png"
                     rgb_img.save(image_dir / img_name)
 
