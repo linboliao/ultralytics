@@ -94,6 +94,8 @@ from .transformer import (
 from .PKI import C2f_PKIBlock,C3k2PKI
 from .DSC import DySnakeConv, C3k2DSC
 from .RCM import RCM, C3k2RCM
+from .ASPP import ASPP
+from .GGDC import GGDC
 
 __all__ = (
     "Conv",
@@ -175,5 +177,7 @@ __all__ = (
     "DySnakeConv",
     "C3k2DSC",
     "C3k2RCM",
-    "RCM"
+    "RCM",
+    "ASPP",
+    "GGDC",
 )
