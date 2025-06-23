@@ -9,7 +9,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import ImageDraw
-from shapely.geometry import Polygon, box
+from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString, MultiLineString, LinearRing, shape, box
 from shapely.validation import make_valid
 from segmentation.wsi import WSIOperator
 from loguru import logger
@@ -130,7 +130,7 @@ class GeoJSONYOLOConverter(YOLOConverter):
     CLASS_MAPPING = {
         'no-cancer': 0,
         'Negative': 0,
-        'Positive': 1,
+        'Positive': 0,
         'Tumor': 1,
         'Other': 2,
     }
@@ -142,22 +142,89 @@ class GeoJSONYOLOConverter(YOLOConverter):
             for name, clazz in self.CLASS_MAPPING.items():
                 f.write(f"{clazz} {name}\n")
 
+    @staticmethod
+    def line2poly(line):
+        coords = list(line.coords)
+
+        # 检查是否闭合（首尾点相同）
+        if coords[0] != coords[-1]:
+            coords.append(coords[0])  # 添加首点使线闭合
+
+        # 创建闭合多边形
+        return Polygon(coords)
+
+    def decompose_geometry(self, geom):
+        """递归分解复杂几何类型为基本多边形"""
+        if geom.is_empty:
+            return []
+
+        if isinstance(geom, (Polygon, LinearRing)):
+            return [geom]
+
+        if isinstance(geom, LineString):
+            return [self.line2poly(geom)]
+
+        if isinstance(geom, MultiLineString):
+            return [self.line2poly(line) for line in geom.geoms]
+
+        if isinstance(geom, MultiPolygon):
+            return list(geom.geoms)
+
+        if isinstance(geom, GeometryCollection):
+            polygons = []
+            for g in geom.geoms:
+                polygons.extend(self.decompose_geometry(g))
+            return polygons
+
+        logger.warning(f"未处理的几何类型: {geom.geom_type}")
+        return []
+
+    def ensure_valid_polygon(self, poly):
+        """确保返回有效多边形"""
+        if not poly.is_valid:
+            poly = make_valid(poly)
+
+        # 递归处理GeometryCollection
+        if isinstance(poly, GeometryCollection):
+            valid_polys = []
+            for geom in poly.geoms:
+                if geom.geom_type.startswith('Polygon') or geom.geom_type == 'LinearRing':
+                    valid_polys.append(geom)
+                elif geom.geom_type == 'LineString':
+                    valid_polys.append(self.line2poly(geom))
+            return valid_polys
+        return [poly]
+
     def parse_geojson(self, geojson_path):
-        """解析GeoJSON文件"""
+        """解析GeoJSON文件 - 修复几何处理逻辑"""
         annotations = []
         with open(geojson_path, 'r') as f:
             geojson_data = json.load(f)
 
         for feature in geojson_data['features']:
-            if feature['geometry']['type'] == 'Polygon':
-                coords = feature['geometry']['coordinates'][0]
-                class_name = feature.get('properties', {}).get('classification', {}).get('name', 'Positive')
-                # class_name = self.GROUP_MAPPING.get(class_name, '')
-                if class_name and class_name != 'Other':
-                    annotations.append({
-                        'polygon': make_valid(Polygon(coords)),
-                        'class_name': class_name
-                    })
+            class_name = feature.get('properties', {}).get('classification', {}).get('name', 'Positive')
+            if not class_name:  # 仅跳过无类别标注
+                continue
+
+            try:
+                # 使用shapely直接构建几何对象[3](@ref)
+                geom = shape(feature['geometry'])
+                valid_geoms = self.ensure_valid_polygon(geom)
+
+                for valid_geom in valid_geoms:
+                    # 分解复合几何类型
+                    polygons = self.decompose_geometry(valid_geom)
+                    for polygon in polygons:
+                        if polygon.is_empty:
+                            continue
+                        annotations.append({
+                            'polygon': polygon,
+                            'class_name': class_name
+                        })
+            except Exception as e:
+                logger.error(f"几何解析错误: {str(e)}")
+                continue
+
         return annotations
 
     def process_slide(self, slide_name, dataset_type="train"):
@@ -227,17 +294,16 @@ class GeoJSONYOLOConverter(YOLOConverter):
 
                     if not intersection.is_empty:
                         has_labels = True
-                        if intersection.geom_type == 'Polygon':
-                            polygons = [intersection]
-                        elif intersection.geom_type == 'MultiPolygon':
-                            polygons = intersection.geoms
-                        else:
-                            continue
+                        # 使用统一方法分解几何
+                        polygons = self.decompose_geometry(intersection)
 
                         for poly in polygons:
+                            if poly.is_empty:
+                                continue
+
                             exterior = list(poly.exterior.coords)
                             normalized_points = []
-                            points = [[pt[0] - actual_x, pt[1] - actual_y] for pt in exterior]
+                            points = [[(pt[0] - actual_x) / times, (pt[1] - actual_y) / times] for pt in exterior]
                             for pt in points:
                                 norm_x = max(0.0, min(1.0, pt[0] / actual_w))
                                 norm_y = max(0.0, min(1.0, pt[1] / actual_h))
@@ -249,7 +315,7 @@ class GeoJSONYOLOConverter(YOLOConverter):
                             points = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
 
                             # 绘制轮廓
-                            color = (0,255,0) if clazz == 0 else (255,0,0)
+                            color = (0, 255, 0) if clazz == 0 else (255, 0, 0)
                             cv2.polylines(contour_img, [points], isClosed=True, color=color, thickness=5)
 
                 # 保存结果
@@ -445,38 +511,36 @@ class MultiMagGeo2YOLO(GeoJSONYOLOConverter):
                 draw = ImageDraw.Draw(contour_img)
 
                 # 处理标注
+                # 在处理标注部分使用统一分解方法
                 for anno in annotations:
-                    if patch_box.intersects(anno['polygon']):
-                        intersection = patch_box.intersection(anno['polygon'])
+                    intersection = patch_box.intersection(anno['polygon'])
 
-                        if not intersection.is_empty:
-                            has_labels = True
-                            if intersection.geom_type == 'Polygon':
-                                polygons = [intersection]
-                            elif intersection.geom_type == 'MultiPolygon':
-                                polygons = intersection.geoms
-                            else:
+                    if not intersection.is_empty:
+                        has_labels = True
+                        # 使用统一方法分解几何
+                        polygons = self.decompose_geometry(intersection)
+
+                        for poly in polygons:
+                            if poly.is_empty:
                                 continue
+                            exterior = list(poly.exterior.coords)
+                            normalized_points = []
 
-                            for poly in polygons:
-                                exterior = list(poly.exterior.coords)
-                                normalized_points = []
+                            for pt in exterior:
+                                local_x = pt[0] - actual_x
+                                local_y = pt[1] - actual_y
+                                norm_x = max(0.0, min(1.0, local_x / actual_w))
+                                norm_y = max(0.0, min(1.0, local_y / actual_h))
+                                normalized_points.extend([norm_x, norm_y])
 
-                                for pt in exterior:
-                                    local_x = pt[0] - actual_x
-                                    local_y = pt[1] - actual_y
-                                    norm_x = max(0.0, min(1.0, local_x / actual_w))
-                                    norm_y = max(0.0, min(1.0, local_y / actual_h))
-                                    normalized_points.extend([norm_x, norm_y])
+                            clazz = self.CLASS_MAPPING.get(anno['class_name'], 3)
+                            points_str = " ".join(f"{p:.6f}" for p in normalized_points)
+                            label_lines.append(f"{clazz} {points_str}")
 
-                                clazz = self.CLASS_MAPPING.get(anno['class_name'], 3)
-                                points_str = " ".join(f"{p:.6f}" for p in normalized_points)
-                                label_lines.append(f"{clazz} {points_str}")
-
-                                # 绘制轮廓
-                                draw.line(exterior, fill="red", width=5)
-                                if len(exterior) > 1:
-                                    draw.line([exterior[-1], exterior[0]], fill="red", width=2)
+                            # 绘制轮廓
+                            draw.line(exterior, fill="red", width=5)
+                            if len(exterior) > 1:
+                                draw.line([exterior[-1], exterior[0]], fill="red", width=2)
 
                 # 保存结果
                 if has_labels:
@@ -499,13 +563,13 @@ class MultiMagGeo2YOLO(GeoJSONYOLOConverter):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal')
 parser.add_argument('--slide_dir', type=str, default='')
 parser.add_argument('--label_dir', type=str, default='')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/dataset/2048')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal/dataset/2048')
 parser.add_argument('--patch_size', type=int, default=2048)
-parser.add_argument('--patch_level', type=int, default=0)
-parser.add_argument('--num_workers', type=int, default=40)
+parser.add_argument('--patch_level', type=int, default=2)
+parser.add_argument('--num_workers', type=int, default=10)
 parser.add_argument('--seed', type=int, default=42)
 
 args = parser.parse_args()
