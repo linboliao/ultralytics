@@ -19,6 +19,9 @@ def get_contours(image):
     # 使用更精确的颜色范围
     lower_bound = np.array([10, 10, 10])
     upper_bound = np.array([210, 190, 180])
+    # 基底
+    # lower_bound = np.array([220, 0, 0])
+    # upper_bound = np.array([240, 100, 100])
 
     image = np.array(image)
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -137,7 +140,8 @@ class GeoContouring(Contouring):
         patch_area = self.patch_size ** 2
 
         # 过滤小面积和过大轮廓
-        if area < patch_area * 0.0001 or area > patch_area * 0.95:
+        # if area < patch_area * 0.0001 or area > patch_area * 0.95:
+        if area > patch_area * 0.95:
             return None
 
         # 转换为点列表
@@ -254,38 +258,13 @@ class GeoContouring(Contouring):
             logger.info(f'Generated {output_path} with {len(features)} features.')
 
 
-# 辅助函数（需要实现）
-def get_points_from_txt(file_path):
-    """从文本文件获取点坐标（示例实现）"""
-    if not os.path.exists(file_path):
-        return np.array([])
-
-    points = []
-    with open(file_path, 'r') as f:
-        for line in f:
-            x, y = map(float, line.strip().split(','))
-            points.append([x, y])
-    return np.array(points)
-
-
-def affine_transform(points, a, b, c, d, e, f):
-    """应用仿射变换（示例实现）"""
-    # 实际实现需要根据点的结构调整
-    return points
-
-
-def is_background(img, threshold=0.8):
-    """判断图像是否为背景（示例实现）"""
-    return False
-
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/IHC', help='patch directory')
 parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/slides', help='patch directory')
 parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/label', help='output directory')
 parser.add_argument('--patch_size', type=int, default=4096, help='patch size')
-parser.add_argument('--ihc_ext', type=str, default='-IHC', help='patch size')
+parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
 parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()

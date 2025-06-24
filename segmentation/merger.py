@@ -119,11 +119,19 @@ class GeoJSONProcessor:
         :param output_path: 输出GeoJSON路径
         :param simplify_tolerance: 几何简化容差值
         """
+        # TODO 修改 slide 后缀
+        self.slide_path = Path(input_path.replace('/label/', '/IHC/').replace('.geojson', '.kfb'))
         self.input_path = input_path
         self.output_path = output_path
         self.points_dir = points_dir
         self.ihc_ext = ihc_ext
         self.simplify_tolerance = simplify_tolerance
+        try:
+            self.transform_params = self.get_reg_param()
+        except FileNotFoundError:
+            self.transform_params = None
+            logger.info(f'{Path(self.input_path).stem} 无配准点，跳过')
+            return
         self.load_data()
 
     def load_data(self):
@@ -197,7 +205,11 @@ class GeoJSONProcessor:
 
     def _create_stripe_polygon(self, direction, position):
         """创建条带多边形"""
-        minx, miny, maxx, maxy = self.bounds
+        if not os.path.exists(self.slide_path):
+            maxx, maxy = 100000, 100000
+        else:
+            wsi = WSIOperator(self.slide_path)
+            maxx, maxy = wsi.level_dimensions[0]
         buffer = BUFFER_SIZE
 
         if direction == 'horizontal':
@@ -217,8 +229,11 @@ class GeoJSONProcessor:
         """并行处理横向/纵向条带区域"""
         # minx, miny, maxx, maxy = self.bounds
         minx, miny = 0, 0
-        wsi = WSIOperator('/NAS2/Data1/lbliao/Data/MXB/classification/第一批/IHC/1547583.18有癌-CK.kfb')
-        maxx, maxy = wsi.level_dimensions[0]
+        if not os.path.exists(self.slide_path):
+            maxx, maxy = 100000, 100000
+        else:
+            wsi = WSIOperator(self.slide_path)
+            maxx, maxy = wsi.level_dimensions[0]
         tasks = []
 
         # 创建横向条带任务
@@ -370,22 +385,24 @@ class GeoJSONProcessor:
 
     def execute(self, patch_size=2048):
         """执行处理流程"""
-        try:
-            transform_params = self.get_reg_param()
-        except FileNotFoundError:
-            logger.info(f'{Path(self.input_path).stem} 无配准点，跳过')
+        if not self.transform_params:
             return
+        transform_params = self.transform_params
         result_gdf = self.process_stripes(patch_size)
 
         # 移除面积小于5000的孔洞
         result_gdf['geometry'] = result_gdf['geometry'].apply(
             lambda geom: self.remove_small_holes(geom, min_area=5000)
         )
+
+        # 仿射变换
         result_gdf['geometry'] = result_gdf['geometry'].apply(
             lambda geom: self.transform_geometry(geom, transform_params)
         )
+
+        # 平滑
         result_gdf['geometry'] = result_gdf['geometry'].apply(
-            lambda geom: self.merge_close_holes(geom, 10)
+            lambda geom: self.merge_close_holes(geom, 25)
         )
         buffered = unary_union(result_gdf.geometry)
         result_gdf = gpd.GeoDataFrame(geometry=[buffered], crs=self.crs)
@@ -394,14 +411,15 @@ class GeoJSONProcessor:
         return f"处理完成！已保存至 {self.output_path}"
 
 
-def remove_intersecting_polygons_rtree(detect_path, seg_path, output_path):
+def remove_intersects(detect_path, seg_path, output_path, area_ratio_threshold=0.2):
     """
-    使用R树索引优化大数据集性能
+    移除seg中与detect相交且相交面积占detect轮廓面积超过阈值的多边形
 
     参数:
-        geojson1_path: 参考GeoJSON文件路径
-        geojson2_path: 需要处理的GeoJSON文件路径
+        detect_path: 参考GeoJSON文件路径(作为基准)
+        seg_path: 需要处理的GeoJSON文件路径
         output_path: 输出文件路径
+        area_ratio_threshold: 面积比例阈值(0-1)，默认0.1表示10%
     """
     # 读取数据
     if not os.path.exists(detect_path):
@@ -421,46 +439,61 @@ def remove_intersecting_polygons_rtree(detect_path, seg_path, output_path):
 
     # 找出需要移除的多边形
     to_remove = set()
-    for i, geom in enumerate(seg['geometry']):
+    for i, seg_geom in enumerate(seg['geometry']):
         # 查询可能相交的参考多边形
-        for j in idx.intersection(geom.bounds):
-            if geom.intersects(detect.iloc[j]['geometry']):
-                to_remove.add(i)
-                break
+        for j in idx.intersection(seg_geom.bounds):
+            detect_geom = detect.iloc[j]['geometry']
+            if seg_geom.intersects(detect_geom):
+                # 计算相交面积
+                intersection = seg_geom.intersection(detect_geom)
+                intersection_area = intersection.area
+                detect_area = detect_geom.area
 
-    # 保留不相交的多边形
+                # 计算面积比例
+                area_ratio = intersection_area / detect_area
+
+                # 如果面积比例超过阈值，则标记为需要移除
+                if area_ratio >= area_ratio_threshold:
+                    to_remove.add(i)
+                    break
+
+    # 保留不需要移除的多边形
     result = seg.drop(index=list(to_remove))
 
     # 保存结果
     result.to_file(output_path, driver='GeoJSON')
-    logger.info(f"已移除{len(to_remove)}个相交的多边形，结果已保存到{output_path}")
-
+    logger.info(f"已移除{len(to_remove)}个相交且面积比例超过{area_ratio_threshold * 100}%的多边形，结果已保存到{output_path}")
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批', help='patch directory')
 parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/label', help='patch directory')
 parser.add_argument('--point_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/points', help='patch directory')
 parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/label', help='output directory')
-parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/detect', help='output directory')
+parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/detect', help='output directory')
 parser.add_argument('--patch_size', type=int, default=4096, help='patch size')
 parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
 if __name__ == "__main__":
     args = parser.parse_args()
-    # input_dir = args.input_dir
-    # geojson2txt(args.point_dir)
-    # json2txt(args.point_dir)
-    # for file in os.listdir(input_dir):
-    #     processor = GeoJSONProcessor(
-    #         input_path=os.path.join(input_dir, file.replace(args.ihc_ext, '')),
-    #         output_path=os.path.join(args.output_dir, file),
-    #         points_dir=args.point_dir,
-    #         ihc_ext=args.ihc_ext,
-    #         simplify_tolerance=0.01
-    #     )
-    #     processor.execute(patch_size=4096)
+    input_dir = args.input_dir
+    geojson2txt(args.point_dir)
+    json2txt(args.point_dir)
+    for file in os.listdir(input_dir):
+        if not os.path.exists(os.path.join(input_dir, file)):
+            logger.info(f'{file} label not exists, skip')
+            continue
+        processor = GeoJSONProcessor(
+            input_path=os.path.join(input_dir, file),
+            output_path=os.path.join(args.output_dir, file.replace(args.ihc_ext, '')),
+            points_dir=args.point_dir,
+            ihc_ext=args.ihc_ext,
+            simplify_tolerance=0.01
+        )
+        processor.execute(patch_size=4096)
     for file in os.listdir(args.output_dir):
-        remove_intersecting_polygons_rtree(
-            detect_path=os.path.join(args.detect_dir, file.replace('-CK', '')),
+        if '-CK' in file or '-new' in file:
+            continue
+        remove_intersects(
+            detect_path=os.path.join(args.detect_dir, file.replace('有癌', '')),
             seg_path=os.path.join(args.output_dir, file),
-            output_path=os.path.join(args.output_dir, file),
+            output_path=os.path.join(args.output_dir, file.replace('.geojson', '-new.geojson')),
         )

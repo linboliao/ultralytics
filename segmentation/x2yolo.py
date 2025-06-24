@@ -14,6 +14,7 @@ from shapely.validation import make_valid
 from segmentation.wsi import WSIOperator
 from loguru import logger
 from tqdm import tqdm
+from rtree import index
 import traceback
 
 
@@ -227,8 +228,29 @@ class GeoJSONYOLOConverter(YOLOConverter):
 
         return annotations
 
+    def build_spatial_index(self, annotations):
+        """构建R-tree空间索引加速查询[6](@ref)"""
+        idx = index.Index()
+        spatial_data = []
+
+        for i, anno in enumerate(annotations):
+            geom = anno['polygon']
+            if not geom.is_valid:
+                geom = make_valid(geom)
+
+            # 存储最小外接矩形
+            bounds = geom.bounds
+            idx.insert(i, bounds)
+            spatial_data.append({
+                'polygon': geom,
+                'class_name': anno['class_name'],
+                'bounds': bounds
+            })
+
+        return idx, spatial_data
+
     def process_slide(self, slide_name, dataset_type="train"):
-        """处理单个切片"""
+        """处理单个切片（重构版）"""
         slide_path = self.slide_dir / slide_name
         slide_id = Path(slide_path).stem
         geojson_path = self.label_dir / f"{slide_id}.geojson"
@@ -244,21 +266,29 @@ class GeoJSONYOLOConverter(YOLOConverter):
             slide = WSIOperator(str(slide_path))
             width, height = slide.level_dimensions[self.patch_level]
             times = 2 ** self.patch_level
-            logger.info(f"载入切片 {slide_name} 成功 | 级别: {self.patch_level} | 尺寸: {width}x{height}")
+            print(f"载入切片 {slide_name} 成功 | 级别: {self.patch_level} | 尺寸: {width}x{height}")
         except Exception as e:
-            logger.error(f"打开切片文件失败: {str(e)}")
+            print(f"打开切片文件失败: {str(e)}")
             return
 
         # 解析标注
         if not os.path.exists(geojson_path):
             os.remove(slide_path)
-            logger.info(f'{geojson_path}标注缺失，跳过！删除对应slide')
+            print(f'{geojson_path}标注缺失，跳过！删除对应slide')
             return
+
         annotations = self.parse_geojson(geojson_path)
+        print(f"解析到 {len(annotations)} 个标注几何体")
+
+        # 构建空间索引
+        spatial_idx, spatial_data = self.build_spatial_index(annotations)
 
         # 处理每个patch
         patch_count = 0
         skipped_count = 0
+
+        # 组织区域检测（简化版）
+        tissue_mask = np.ones((height, width))  # 默认全为组织区域
 
         for y in range(0, height, self.patch_size):
             for x in range(0, width, self.patch_size):
@@ -275,7 +305,6 @@ class GeoJSONYOLOConverter(YOLOConverter):
                 patch_img = slide.read_region((x, y), self.patch_level, (w, h), check_background=True)
 
                 if not patch_img:
-                    # logger.info(f'{slide_id} patch {x} {y} 为背景，跳过！')
                     skipped_count += 1
                     continue
 
@@ -283,43 +312,59 @@ class GeoJSONYOLOConverter(YOLOConverter):
                 label_lines = []
                 has_labels = False
 
-                # # 创建轮廓图像
+                # 创建轮廓图像
                 contour_img = patch_img.copy()
                 contour_img = np.array(contour_img)
                 contour_img = cv2.cvtColor(contour_img, cv2.COLOR_RGB2BGR)
 
-                # 处理标注
-                for anno in annotations:
-                    intersection = patch_box.intersection(anno['polygon'])
+                # --- 空间索引查询 ---
+                patch_geom = box(actual_x, actual_y, actual_x + actual_w, actual_y + actual_h)
+                candidate_ids = list(spatial_idx.intersection(patch_geom.bounds))
 
-                    if not intersection.is_empty:
+                # --- 标注处理 ---
+                for idx in candidate_ids:
+                    anno = spatial_data[idx]
+                    geom = anno['polygon']
+
+                    # 精确几何相交检测
+                    intersection = patch_geom.intersection(geom)
+                    if intersection.is_empty:
+                        continue
+
+                    # 处理所有子几何
+                    for poly in self.normalize_geometry(intersection):
+                        if poly.area / patch_geom.area < self.min_area_ratio:
+                            continue
+
+                        # 坐标转换
+                        points = self.convert_to_yolo_format(poly, patch_geom, times)
+                        if not points:
+                            continue
+
+                        # 转换坐标用于绘制
+                        draw_points = []
+                        for i in range(0, len(points), 2):
+                            px = points[i] * actual_w
+                            py = points[i + 1] * actual_h
+                            draw_points.append([int(px), int(py)])
+
+                        # 生成YOLO格式标注
+                        clazz = self.CLASS_MAPPING.get(anno['class_name'], 0)
+                        points_str = " ".join(f"{p:.6f}" for p in points)
+                        label_lines.append(f"{clazz} {points_str}")
+
+                        # 绘制轮廓
+                        points_np = np.array(draw_points, dtype=np.int32).reshape((-1, 1, 2))
+                        color = (0, 255, 0) if clazz == 0 else (255, 0, 0)
+                        cv2.polylines(contour_img, [points_np], isClosed=True, color=color, thickness=2)
                         has_labels = True
-                        # 使用统一方法分解几何
-                        polygons = self.decompose_geometry(intersection)
 
-                        for poly in polygons:
-                            if poly.is_empty:
-                                continue
+                # --- 智能保存策略 ---
+                # 计算组织密度动态调整采样率
+                tissue_ratio = self.calc_tissue_density(tissue_mask, x, y, w, h)
+                keep_prob = max(0.3, tissue_ratio * 0.7)  # 组织越多保留概率越高
 
-                            exterior = list(poly.exterior.coords)
-                            normalized_points = []
-                            points = [[(pt[0] - actual_x) / times, (pt[1] - actual_y) / times] for pt in exterior]
-                            for pt in points:
-                                norm_x = max(0.0, min(1.0, pt[0] / actual_w))
-                                norm_y = max(0.0, min(1.0, pt[1] / actual_h))
-                                normalized_points.extend([norm_x, norm_y])
-
-                            clazz = self.CLASS_MAPPING.get(anno['class_name'], 0)
-                            points_str = " ".join(f"{p:.6f}" for p in normalized_points)
-                            label_lines.append(f"{clazz} {points_str}")
-                            points = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
-
-                            # 绘制轮廓
-                            color = (0, 255, 0) if clazz == 0 else (255, 0, 0)
-                            cv2.polylines(contour_img, [points], isClosed=True, color=color, thickness=5)
-
-                # 保存结果
-                if has_labels or random.random() < 0.5:
+                if has_labels or random.random() < keep_prob:
                     img_name = f"{slide_id}_{x}_{y}.png"
                     rgb_img.save(image_dir / img_name)
 
@@ -327,12 +372,12 @@ class GeoJSONYOLOConverter(YOLOConverter):
                     with open(label_dir / txt_name, 'w') as f:
                         f.write("\n".join(label_lines))
 
-                    cv2.imwrite(Path(contour_dir / img_name), contour_img)
+                    cv2.imwrite(str(contour_dir / img_name), contour_img)
                     patch_count += 1
                 else:
                     skipped_count += 1
 
-        logger.info(f"处理完成! 有效patch: {patch_count} | 跳过无标签patch: {skipped_count}")
+        print(f"处理完成! 有效patch: {patch_count} | 跳过无标签patch: {skipped_count}")
 
 
 # ====================== KVJSON转换器 ======================
@@ -566,7 +611,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal')
 parser.add_argument('--slide_dir', type=str, default='')
 parser.add_argument('--label_dir', type=str, default='')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal/dataset/2048')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal/dataset/2047')
 parser.add_argument('--patch_size', type=int, default=2048)
 parser.add_argument('--patch_level', type=int, default=2)
 parser.add_argument('--num_workers', type=int, default=10)
