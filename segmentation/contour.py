@@ -1,5 +1,6 @@
 import argparse
 
+import PIL
 import numpy as np
 import cv2
 import os
@@ -20,9 +21,8 @@ def get_contours(image):
     lower_bound = np.array([10, 10, 10])
     upper_bound = np.array([210, 190, 180])
     # 基底
-    # lower_bound = np.array([220, 0, 0])
+    # lower_bound = np.array([0, 0, 220])
     # upper_bound = np.array([240, 100, 100])
-
     image = np.array(image)
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
@@ -40,6 +40,39 @@ def get_contours(image):
     # 检测轮廓并加入面积筛选
     contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
     return contours, hierarchy
+
+
+# def get_contours(image):
+#     image = np.array(image)
+#     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+#     # 1. 色彩增强（突出棕褐色腺体区域）
+#     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+#     # 调整饱和度和明度通道增强对比
+#     h, s, v = cv2.split(hsv)
+#     s = cv2.multiply(s, 1.5).clip(0, 255).astype(np.uint8)  # 增加饱和度
+#     v = cv2.multiply(v, 1.2).clip(0, 255).astype(np.uint8)  # 增加亮度
+#     enhanced_hsv = cv2.merge([h, s, v])
+#     enhanced = cv2.cvtColor(enhanced_hsv, cv2.COLOR_HSV2BGR)
+#
+#     # 2. 转换为灰度图并应用高斯模糊
+#     gray = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
+#     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+#
+#     # 3. 应用大津法自动阈值
+#     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+#
+#     # 4. 形态学处理优化分割结果
+#     kernel = np.ones((1, 1), np.uint8)
+#     opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+#     closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=3)
+#
+#     # 5. 查找轮廓（仅外部轮廓）
+#     contours, hierarchy = cv2.findContours(
+#         closed,
+#         cv2.RETR_EXTERNAL,
+#         cv2.CHAIN_APPROX_SIMPLE
+#     )
+#     return contours, hierarchy
 
 
 class Contouring:
@@ -140,8 +173,7 @@ class GeoContouring(Contouring):
         patch_area = self.patch_size ** 2
 
         # 过滤小面积和过大轮廓
-        # if area < patch_area * 0.0001 or area > patch_area * 0.95:
-        if area > patch_area * 0.95:
+        if area < patch_area * 0.0001 or area > patch_area * 0.95:
             return None
 
         # 转换为点列表
@@ -195,7 +227,7 @@ class GeoContouring(Contouring):
             for poly in polygons:
                 # 获取外轮廓坐标（此时 poly 是 Polygon，有 exterior 属性）
                 poly_area = poly.area
-                if poly_area < patch_area * 0.001:
+                if poly_area < patch_area * 0.0001:
                     continue  # 跳过当前多边形
                 exterior_coords = list(poly.exterior.coords)
                 exterior_coords = [(point[0], point[1]) for point in exterior_coords]
@@ -259,10 +291,10 @@ class GeoContouring(Contouring):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批', help='patch directory')
-parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/IHC', help='patch directory')
-parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/slides', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/label', help='output directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/20250104/', help='patch directory')
+parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/CK', help='patch directory')
+parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/slide', help='patch directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/label', help='output directory')
 parser.add_argument('--patch_size', type=int, default=4096, help='patch size')
 parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
 parser.add_argument('--slide_list', type=list)

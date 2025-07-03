@@ -9,7 +9,7 @@ import pandas as pd
 import uuid
 
 from scipy.optimize import curve_fit
-from shapely.geometry import Polygon, MultiPolygon, LineString, GeometryCollection
+from shapely.geometry import Polygon, MultiPolygon, LineString, GeometryCollection, MultiLineString
 from shapely.ops import unary_union, transform
 from shapely import make_valid
 from concurrent.futures import ProcessPoolExecutor  # 改为多进程处理
@@ -120,18 +120,19 @@ class GeoJSONProcessor:
         :param simplify_tolerance: 几何简化容差值
         """
         # TODO 修改 slide 后缀
-        self.slide_path = Path(input_path.replace('/label/', '/IHC/').replace('.geojson', '.kfb'))
+        # self.slide_path = Path(input_path.replace('/label/', '/slide/').replace('.geojson', ''))
+        self.slide_path = '/NAS2/Data1/lbliao/Data/MXB/Detection/0318/slides/1834976T_可疑.svs'
         self.input_path = input_path
         self.output_path = output_path
         self.points_dir = points_dir
         self.ihc_ext = ihc_ext
         self.simplify_tolerance = simplify_tolerance
-        try:
-            self.transform_params = self.get_reg_param()
-        except FileNotFoundError:
-            self.transform_params = None
-            logger.info(f'{Path(self.input_path).stem} 无配准点，跳过')
-            return
+        # try:
+        #     self.transform_params = self.get_reg_param()
+        # except FileNotFoundError:
+        #     self.transform_params = None
+        #     logger.info(f'{Path(self.input_path).stem} 无配准点，跳过')
+        #     return
         self.load_data()
 
     def load_data(self):
@@ -334,7 +335,12 @@ class GeoJSONProcessor:
 
     def merge_close_holes(self, polygon, max_distance=0.5):
         """合并距离小于阈值的孔洞"""
-        if polygon.is_empty or not polygon.interiors:
+        if isinstance(polygon, MultiPolygon):
+            return MultiPolygon([
+                self.merge_close_holes(part, max_distance) for part in polygon.geoms
+            ])
+
+        if polygon.is_empty or isinstance(polygon, LineString) or isinstance(polygon, MultiLineString) or not polygon.interiors:
             return polygon
 
         # 提取所有孔洞
@@ -385,9 +391,6 @@ class GeoJSONProcessor:
 
     def execute(self, patch_size=2048):
         """执行处理流程"""
-        if not self.transform_params:
-            return
-        transform_params = self.transform_params
         result_gdf = self.process_stripes(patch_size)
 
         # 移除面积小于5000的孔洞
@@ -395,14 +398,20 @@ class GeoJSONProcessor:
             lambda geom: self.remove_small_holes(geom, min_area=5000)
         )
 
+        # transform_params = self.transform_params
+        # if not self.transform_params:
+        #     return
         # 仿射变换
-        result_gdf['geometry'] = result_gdf['geometry'].apply(
-            lambda geom: self.transform_geometry(geom, transform_params)
-        )
+        # result_gdf['geometry'] = result_gdf['geometry'].apply(
+        #     lambda geom: self.transform_geometry(geom, transform_params)
+        # )
 
         # 平滑
+        # result_gdf['geometry'] = result_gdf['geometry'].apply(
+        #     lambda geom: self.merge_close_holes(geom, 25)
+        # )
         result_gdf['geometry'] = result_gdf['geometry'].apply(
-            lambda geom: self.merge_close_holes(geom, 25)
+            lambda geom: geom.simplify(tolerance=10)  # 示例容差10米
         )
         buffered = unary_union(result_gdf.geometry)
         result_gdf = gpd.GeoDataFrame(geometry=[buffered], crs=self.crs)
@@ -464,19 +473,21 @@ def remove_intersects(detect_path, seg_path, output_path, area_ratio_threshold=0
     result.to_file(output_path, driver='GeoJSON')
     logger.info(f"已移除{len(to_remove)}个相交且面积比例超过{area_ratio_threshold * 100}%的多边形，结果已保存到{output_path}")
 
+
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批', help='patch directory')
-parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/label', help='patch directory')
-parser.add_argument('--point_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/points', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/第一批/label', help='output directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment', help='patch directory')
+parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/results', help='patch directory')
+parser.add_argument('--point_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/points', help='patch directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/results-1', help='output directory')
 parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/detect', help='output directory')
-parser.add_argument('--patch_size', type=int, default=4096, help='patch size')
+parser.add_argument('--patch_size', type=int, default=512, help='patch size')
 parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
 if __name__ == "__main__":
     args = parser.parse_args()
     input_dir = args.input_dir
-    geojson2txt(args.point_dir)
-    json2txt(args.point_dir)
+    # geojson2txt(args.point_dir)
+    # json2txt(args.point_dir)
+    os.makedirs(args.output_dir, exist_ok=True)
     for file in os.listdir(input_dir):
         if not os.path.exists(os.path.join(input_dir, file)):
             logger.info(f'{file} label not exists, skip')
@@ -488,12 +499,12 @@ if __name__ == "__main__":
             ihc_ext=args.ihc_ext,
             simplify_tolerance=0.01
         )
-        processor.execute(patch_size=4096)
-    for file in os.listdir(args.output_dir):
-        if '-CK' in file or '-new' in file:
-            continue
-        remove_intersects(
-            detect_path=os.path.join(args.detect_dir, file.replace('有癌', '')),
-            seg_path=os.path.join(args.output_dir, file),
-            output_path=os.path.join(args.output_dir, file.replace('.geojson', '-new.geojson')),
-        )
+        processor.execute(patch_size=args.patch_size)
+    # for file in os.listdir(args.output_dir):
+    #     if '-CK' in file or '-new' in file:
+    #         continue
+    #     remove_intersects(
+    #         detect_path=os.path.join(args.detect_dir, file.replace('有癌', '')),
+    #         seg_path=os.path.join(args.output_dir, file),
+    #         output_path=os.path.join(args.output_dir, file.replace('.geojson', '-new.geojson')),
+    #     )
