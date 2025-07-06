@@ -381,10 +381,12 @@ class LMAnnotation(Annotation):
                     clazz = 0
                 elif shape.get('label') in ['cancer', '导管内癌', '1', '电切癌']:
                     clazz = 1
-                elif shape.get('label') in ['血管']:
+                elif shape.get('label') in ['2', '3']:
                     clazz = 2
-                elif shape.get('label') in ['神经节', '侵犯神经']:
+                elif shape.get('label') in ['血管','vessel']:
                     clazz = 3
+                elif shape.get('label') in ['神经节', '侵犯神经', '神经']:
+                    clazz = 4
                 elif shape.get('label') in ['鳞状上皮']:
                     clazz = 4
                 else:
@@ -415,7 +417,7 @@ class LMAnnotation(Annotation):
 
     def parallel_run(self):
         images = os.listdir(self.lm_ann_dir)
-        images = [img for img in images if img.endswith('.jpg')]
+        images = [img for img in images if img.endswith('.png') or img.endswith('.jpg')]
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = [executor.submit(self.run, img) for img in images]
             for future in as_completed(futures):
@@ -624,13 +626,13 @@ def interpolate_points(p1, p2, num_insert):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/zenodo', help='patch directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0702', help='patch directory')
 parser.add_argument('--gpu_ids', type=str, default='0', help='patch directory')
 parser.add_argument('--patch_dir', type=str, default='', help='patch directory')
 parser.add_argument('--slide_dir', type=str, default='', help='patch directory')
 parser.add_argument('--coord_dir', type=str, default='', help='coord directory')
 parser.add_argument('--geo_ann_dir', type=str, default='', help='geo annotation directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/zenodo/dataset/2048-X', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0702/dataset', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--patch_level', type=int, default=0, help='patch size')
 parser.add_argument('--output_size', type=int, default=2048, help='output size')
@@ -639,7 +641,7 @@ parser.add_argument('--slide_list', type=list)  # , default=['patient_012926_sli
 if __name__ == '__main__':
     args = parser.parse_args()
     # YOLOAnnotation(args).run_()
-    GeoAnnotation(args).parallel_run()
-    # LMAnnotation(args).parallel_run()
+    # GeoAnnotation(args).parallel_run()
+    LMAnnotation(args).parallel_run()
     # YOLO2LM(args).parallel_run()
     # KVAnnotation(args).parallel_run()
