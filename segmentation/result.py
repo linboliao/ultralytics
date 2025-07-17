@@ -74,9 +74,9 @@ class Result:
 
     @property
     def slides(self):
-        if self.slide_list:
+        if self.slide_list and len(self.slide_list) > 0:
             slides = self.slide_list
-        elif self.slide:
+        elif self.slide and len(self.slide) > 0:
             slides = [self.slide]
         else:
             slides = [f for f in os.listdir(self.slide_dir) if os.path.isfile(os.path.join(self.slide_dir, f))]
@@ -302,16 +302,15 @@ class GeoResults(Result):
 
         indexed_confs = list(enumerate(confs))
 
-        # 按值降序排序（确保稳定性）
-        sorted_pairs = sorted(indexed_confs, key=lambda x: x[1], reverse=True)
-
-        # 提取前50名的索引
-        top50_indices = [idx for idx, val in sorted_pairs[:min(50, len(sorted_pairs))]]
-        selected_coords = [coords[i] for i in top50_indices]
-        selected_coords = [coord[0][:4] for coord in selected_coords]
-        output_path = os.path.join(self.output_dir, f"{base}.json")
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(selected_coords, f, indent=4)  # 缩进4空格美化格式
+        # # 按值降序排序（确保稳定性）
+        # sorted_pairs = sorted(indexed_confs, key=lambda x: x[1], reverse=True)
+        # # 提取前50名的索引
+        # top50_indices = [idx for idx, val in sorted_pairs[:min(50, len(sorted_pairs))]]
+        # selected_coords = [coords[i] for i in top50_indices]
+        # selected_coords = [coord[0][:4] for coord in selected_coords]
+        # output_path = os.path.join(self.output_dir, f"{base}.json")
+        # with open(output_path, 'w', encoding='utf-8') as f:
+        #     json.dump(selected_coords, f, indent=4)  # 缩进4空格美化格式
         cancer_rate = self.cal_rate(coords, labels)
         total_path = os.path.join(self.output_dir, f"exist_cancer.json")
         data = {"geojson_files": [], "count": 0}
