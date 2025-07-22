@@ -474,12 +474,46 @@ def remove_intersects(detect_path, seg_path, output_path, area_ratio_threshold=0
     logger.info(f"已移除{len(to_remove)}个相交且面积比例超过{area_ratio_threshold * 100}%的多边形，结果已保存到{output_path}")
 
 
+def segment_label(seg_path, detect_path, output_path, area_ratio_threshold=0.2):
+    # 读取两个 GeoJSON 文件
+    seg_gdf = gpd.read_file(seg_path)
+    detect_gdf = gpd.read_file(detect_path)
+
+    # 确保坐标系一致
+    if seg_gdf.crs != detect_gdf.crs:
+        detect_gdf = detect_gdf.to_crs(seg_gdf.crs)
+
+    seg_gdf["classification"] = [
+        {"name": "prostate", "color": [0, 255, 0]}
+        for _ in range(len(seg_gdf))
+    ]
+
+    # 空间连接：找出与 B 相交的 A 中的要素
+    intersected = gpd.sjoin(
+        detect_gdf[["geometry", "classification"]],
+        seg_gdf,
+        how="inner",
+        predicate="intersects",
+        lsuffix="d", rsuffix="g"
+    )
+    # 将 detect 的 annotation 复制到 seg
+    # 遍历相交结果，按 B 的索引更新属性
+    for idx, row in intersected.iterrows():
+        g_index = row["index_g"]
+        seg_gdf.loc[g_index, "classification"] = row["classification_d"]
+    seg_gdf['geometry'] = seg_gdf['geometry'].apply(
+        lambda geom: geom.simplify(tolerance=2)  # 示例容差10米
+    )
+    seg_gdf.to_file(output_path, driver="GeoJSON")
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment', help='patch directory')
 parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/results', help='patch directory')
 parser.add_argument('--point_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/points', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/results-1', help='output directory')
-parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/detect', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/Otsu_output', help='output directory')
+parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/yolo_detect', help='output directory')
+parser.add_argument('--label_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/merger', help='output directory')
 parser.add_argument('--patch_size', type=int, default=512, help='patch size')
 parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
 if __name__ == "__main__":
@@ -488,18 +522,19 @@ if __name__ == "__main__":
     # geojson2txt(args.point_dir)
     # json2txt(args.point_dir)
     os.makedirs(args.output_dir, exist_ok=True)
-    for file in os.listdir(input_dir):
-        if not os.path.exists(os.path.join(input_dir, file)):
-            logger.info(f'{file} label not exists, skip')
-            continue
-        processor = GeoJSONProcessor(
-            input_path=os.path.join(input_dir, file),
-            output_path=os.path.join(args.output_dir, file.replace(args.ihc_ext, '')),
-            points_dir=args.point_dir,
-            ihc_ext=args.ihc_ext,
-            simplify_tolerance=0.01
-        )
-        processor.execute(patch_size=args.patch_size)
+    os.makedirs(args.label_dir, exist_ok=True)
+    # for file in os.listdir(input_dir):
+    #     if not os.path.exists(os.path.join(input_dir, file)):
+    #         logger.info(f'{file} label not exists, skip')
+    #         continue
+    #     processor = GeoJSONProcessor(
+    #         input_path=os.path.join(input_dir, file),
+    #         output_path=os.path.join(args.output_dir, file.replace(args.ihc_ext, '')),
+    #         points_dir=args.point_dir,
+    #         ihc_ext=args.ihc_ext,
+    #         simplify_tolerance=0.01
+    #     )
+    #     processor.execute(patch_size=args.patch_size)
     # for file in os.listdir(args.output_dir):
     #     if '-CK' in file or '-new' in file:
     #         continue
@@ -508,3 +543,14 @@ if __name__ == "__main__":
     #         seg_path=os.path.join(args.output_dir, file),
     #         output_path=os.path.join(args.output_dir, file.replace('.geojson', '-new.geojson')),
     #     )
+    files = os.listdir(args.output_dir)
+    files = [file for file in files if not file.endswith('-CK.geojson') and not file.endswith('-cancer.geojson')]
+    for file in files:
+        detect_file = os.path.join(args.detect_dir, file)
+        if not os.path.isfile(detect_file):
+            logger.info(f'detect file {file} not exists')
+            continue
+        seg_file = os.path.join(args.output_dir, file)
+        label_file = os.path.join(args.label_dir, file)
+        segment_label(seg_file, detect_file, label_file)
+        logger.info(f'{file} 合并结果已经保存！！')
