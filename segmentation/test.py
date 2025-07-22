@@ -9,10 +9,9 @@ from segmentation.new_result import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--ckpt', type=list, default=[
-    '/data2/lbliao/Code/ultralytics/runs/detect/Pconv/weights/best.pt',
-    '/data2/lbliao/Code/ultralytics/runs/detect/2048-1536-2/weights/best.pt',
-    '/data2/lbliao/Code/ultralytics/runs/detect/yolov11/weights/best.pt',
+    '/data2/lbliao/Code/ultralytics/runs/detect/0512/weights/best.pt',
     '/data2/lbliao/Code/ultralytics/runs/detect/cbam/weights/best.pt',
+    '/data2/lbliao/Code/ultralytics/runs/detect/train/weights/best.pt',
     '/data2/lbliao/Code/ultralytics/runs/detect/pki/weights/best.pt'
 ])
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal', help='patch directory')
