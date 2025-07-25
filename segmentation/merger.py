@@ -12,7 +12,7 @@ from scipy.optimize import curve_fit
 from shapely.geometry import Polygon, MultiPolygon, LineString, GeometryCollection, MultiLineString
 from shapely.ops import unary_union, transform
 from shapely import make_valid
-from concurrent.futures import ProcessPoolExecutor  # 改为多进程处理
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor  # 改为多进程处理
 from tqdm import tqdm
 from rtree import index
 from pathlib import Path
@@ -120,8 +120,8 @@ class GeoJSONProcessor:
         :param simplify_tolerance: 几何简化容差值
         """
         # TODO 修改 slide 后缀
-        # self.slide_path = Path(input_path.replace('/label/', '/slide/').replace('.geojson', ''))
-        self.slide_path = '/NAS2/Data1/lbliao/Data/MXB/Detection/0318/slides/1834976T_可疑.svs'
+        self.slide_path = Path(input_path.replace('/segment/', '/slides/').replace('.geojson', '.kfb'))
+        # self.slide_path = '/NAS2/Data1/lbliao/Data/MXB/Detection/0318/slides/1834976T_可疑.svs'
         self.input_path = input_path
         self.output_path = output_path
         self.points_dir = points_dir
@@ -182,18 +182,27 @@ class GeoJSONProcessor:
             merged_polys = list(merged_geom.geoms)
         else:
             return [], intersecting_gdf.index.tolist()
+        prostate, cancer = 0, 0
+        for cls in intersecting_gdf['classification']:
+            name = json.loads(cls.replace("'", '"')).get('name', 'cancer')
+            if name == 'prostate':
+                prostate += 1
+            else:
+                cancer += 1
+
+        # 根据检查结果确定合并要素分类
+        if prostate >= cancer:
+            classification = {"name": "prostate", "color": [0, 255, 0]}
+        else:
+            classification = {"name": "cancer", "color": [255, 0, 0]}
 
         # 属性继承逻辑
         for poly in merged_polys:
-            originals = intersecting_gdf[intersecting_gdf.intersects(poly)]
             merged_features.append({
                 "geometry": poly,
                 "id": str(uuid.uuid4()),
                 "objectType": "annotation",
-                "classification": {
-                    "name": "prostate",
-                    "color": [0, 255, 0]
-                },
+                "classification": classification,
                 "source": "merged"
             })
         return merged_features, intersecting_gdf.index.tolist()
@@ -239,20 +248,27 @@ class GeoJSONProcessor:
 
         # 创建横向条带任务
         horizontal_stripes = np.arange(patch_size, maxy - BUFFER_SIZE, patch_size)
-        for y in horizontal_stripes:
-            if y >= maxy - BUFFER_SIZE:
-                continue
-            poly = self._create_stripe_polygon('horizontal', y)
-            tasks.append(poly)
-
-        # 创建纵向条带任务
         vertical_stripes = np.arange(minx, maxx, patch_size)
+        # for y in horizontal_stripes:
+        #     if y >= maxy - BUFFER_SIZE:
+        #         continue
+        #     poly = self._create_stripe_polygon('horizontal', y)
+        #     tasks.append(poly)
+        #
+        # # 创建纵向条带任务
+        # for x in vertical_stripes:
+        #     if x >= maxx - BUFFER_SIZE:
+        #         continue
+        #     poly = self._create_stripe_polygon('vertical', x)
+        #     tasks.append(poly)
+        b, p = BUFFER_SIZE, patch_size
         for x in vertical_stripes:
-            if x >= maxx - BUFFER_SIZE:
-                continue
-            poly = self._create_stripe_polygon('vertical', x)
-            tasks.append(poly)
-
+            for y in horizontal_stripes:
+                poly = Polygon([
+                    (x - b, y - b), (x - b, y + b + p), (x + b + p, y + b + p), (x + b + p, y - b), (x + b, y - b),  # 外圈
+                    (x + b, y + b), (x - b + p, y + b), (x - b + p, y - b + p), (x + b, y - b + p), (x + b, y + b)  # 内圈
+                ])
+                tasks.append(poly)
         # 并行执行 - 使用多进程处理CPU密集型任务[6,7](@ref)
         merged_all = []
         removed_ids = set()
@@ -260,7 +276,7 @@ class GeoJSONProcessor:
         # 使用partial绑定self引用
         merge_func = partial(self.merge_intersecting)
 
-        with ProcessPoolExecutor() as executor:
+        with ThreadPoolExecutor(max_workers=15) as executor:
             results = list(tqdm(
                 executor.map(merge_func, tasks),
                 total=len(tasks),
@@ -273,17 +289,11 @@ class GeoJSONProcessor:
 
         # 构建最终数据集
         merged_gdf = gpd.GeoDataFrame(merged_all, crs=self.crs)
-        merged_gdf['classification'] = {
-            "name": "prostate",
-            "color": [0, 255, 0]
-        }
+
         non_intersecting_gdf = self.gdf[~self.gdf.index.isin(removed_ids)].copy()
         non_intersecting_gdf['id'] = str(uuid.uuid4())
         non_intersecting_gdf['objectType'] = 'Annotation'
-        non_intersecting_gdf['classification'] = {
-            "name": "prostate",
-            "color": [0, 255, 0]
-        }
+
         non_intersecting_gdf['source'] = 'original'
 
         return pd.concat([merged_gdf, non_intersecting_gdf], ignore_index=True)
@@ -389,6 +399,45 @@ class GeoJSONProcessor:
         new_interiors = [merged_hole.exterior.coords for merged_hole in merged_holes if not isinstance(merged_hole, GeometryCollection)]
         return Polygon(polygon.exterior, holes=new_interiors)
 
+    def union(self, result_gdf):
+        cancer_gdf = result_gdf[result_gdf['classification'].apply(
+            lambda x: 'prostate' not in x
+        )]
+        prostate_gdf = result_gdf[result_gdf['classification'].apply(
+            lambda x: 'prostate' in x
+        )]
+        c_buffered = unary_union(cancer_gdf.geometry)
+        c_feature = {
+            "geometry": c_buffered,
+            "classification": {"name": "cancer", "color": [255, 0, 0]},
+            "area": cancer_gdf.area.sum()  # 计算总面积
+        }
+        p_buffered = unary_union(prostate_gdf.geometry)
+
+        p_feature = {
+            "geometry": p_buffered,
+            "classification": {"name": "prostate", "color": [0, 255, 0]},
+            "area": cancer_gdf.area.sum()  # 计算总面积
+        }
+
+        merged_features = [c_feature, p_feature]
+        merged_gdf = gpd.GeoDataFrame(merged_features, crs=result_gdf.crs)
+        return merged_gdf
+
+    # 定义移除孔洞的函数
+    @staticmethod
+    def remove_holes(geom):
+        """移除几何对象的所有内部孔洞"""
+        if geom.geom_type == 'Polygon':
+            # 提取外边界，忽略内环（孔洞）
+            return Polygon(geom.exterior)
+        elif geom.geom_type == 'MultiPolygon':
+            # 对每个子多边形递归处理
+            return MultiPolygon([Polygon(poly.exterior) for poly in geom.geoms])
+        else:
+            # 非多边形类型（如点、线）直接返回
+            return geom
+
     def execute(self, patch_size=2048):
         """执行处理流程"""
         result_gdf = self.process_stripes(patch_size)
@@ -410,14 +459,17 @@ class GeoJSONProcessor:
         # result_gdf['geometry'] = result_gdf['geometry'].apply(
         #     lambda geom: self.merge_close_holes(geom, 25)
         # )
+
+        # buffered = unary_union(result_gdf.geometry)
+        # result_gdf = gpd.GeoDataFrame(geometry=[buffered], crs=self.crs)
+        result_gdf = self.union(result_gdf)
         result_gdf['geometry'] = result_gdf['geometry'].apply(
-            lambda geom: geom.simplify(tolerance=10)  # 示例容差10米
+            lambda geom: geom.simplify(tolerance=2)  # 示例容差10米
         )
-        buffered = unary_union(result_gdf.geometry)
-        result_gdf = gpd.GeoDataFrame(geometry=[buffered], crs=self.crs)
+        result_gdf['geometry'] = result_gdf['geometry'].apply(self.remove_holes)
         gdf_separated = result_gdf.explode(ignore_index=True)
         gdf_separated.to_file(self.output_path, driver='GeoJSON')
-        return f"处理完成！已保存至 {self.output_path}"
+        print(f"处理完成！已保存至 {self.output_path}")
 
 
 def remove_intersects(detect_path, seg_path, output_path, area_ratio_threshold=0.2):
@@ -501,20 +553,20 @@ def segment_label(seg_path, detect_path, output_path, area_ratio_threshold=0.2):
     for idx, row in intersected.iterrows():
         g_index = row["index_g"]
         seg_gdf.loc[g_index, "classification"] = row["classification_d"]
-    seg_gdf['geometry'] = seg_gdf['geometry'].apply(
-        lambda geom: geom.simplify(tolerance=2)  # 示例容差10米
-    )
+    # seg_gdf['geometry'] = seg_gdf['geometry'].apply(
+    #     lambda geom: geom.simplify(tolerance=2)  # 示例容差10米
+    # )
     seg_gdf.to_file(output_path, driver="GeoJSON")
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment', help='patch directory')
-parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/results', help='patch directory')
+parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/segment', help='patch directory')
 parser.add_argument('--point_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/points', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/Otsu_output', help='output directory')
-parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/yolo_detect', help='output directory')
-parser.add_argument('--label_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/merger', help='output directory')
-parser.add_argument('--patch_size', type=int, default=512, help='patch size')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/merger', help='output directory')
+parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0318/result', help='output directory')
+parser.add_argument('--label_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0318/merger', help='output directory')
+parser.add_argument('--patch_size', type=int, default=1024, help='patch size')
 parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
 if __name__ == "__main__":
     args = parser.parse_args()
@@ -523,18 +575,18 @@ if __name__ == "__main__":
     # json2txt(args.point_dir)
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(args.label_dir, exist_ok=True)
-    # for file in os.listdir(input_dir):
-    #     if not os.path.exists(os.path.join(input_dir, file)):
-    #         logger.info(f'{file} label not exists, skip')
-    #         continue
-    #     processor = GeoJSONProcessor(
-    #         input_path=os.path.join(input_dir, file),
-    #         output_path=os.path.join(args.output_dir, file.replace(args.ihc_ext, '')),
-    #         points_dir=args.point_dir,
-    #         ihc_ext=args.ihc_ext,
-    #         simplify_tolerance=0.01
-    #     )
-    #     processor.execute(patch_size=args.patch_size)
+    for file in os.listdir(input_dir):
+        if not os.path.exists(os.path.join(input_dir, file)):
+            logger.info(f'{file} label not exists, skip')
+            continue
+        processor = GeoJSONProcessor(
+            input_path=os.path.join(input_dir, file),
+            output_path=os.path.join(args.output_dir, file.replace(args.ihc_ext, '')),
+            points_dir=args.point_dir,
+            ihc_ext=args.ihc_ext,
+            simplify_tolerance=0.01
+        )
+        processor.execute(patch_size=args.patch_size)
     # for file in os.listdir(args.output_dir):
     #     if '-CK' in file or '-new' in file:
     #         continue
@@ -543,14 +595,14 @@ if __name__ == "__main__":
     #         seg_path=os.path.join(args.output_dir, file),
     #         output_path=os.path.join(args.output_dir, file.replace('.geojson', '-new.geojson')),
     #     )
-    files = os.listdir(args.output_dir)
-    files = [file for file in files if not file.endswith('-CK.geojson') and not file.endswith('-cancer.geojson')]
-    for file in files:
-        detect_file = os.path.join(args.detect_dir, file)
-        if not os.path.isfile(detect_file):
-            logger.info(f'detect file {file} not exists')
-            continue
-        seg_file = os.path.join(args.output_dir, file)
-        label_file = os.path.join(args.label_dir, file)
-        segment_label(seg_file, detect_file, label_file)
-        logger.info(f'{file} 合并结果已经保存！！')
+    # files = os.listdir(args.output_dir)
+    # files = [file for file in files if not file.endswith('-CK.geojson') and not file.endswith('-cancer.geojson')]
+    # for file in files:
+    #     detect_file = os.path.join(args.detect_dir, file)
+    #     if not os.path.isfile(detect_file):
+    #         logger.info(f'detect file {file} not exists')
+    #         continue
+    #     seg_file = os.path.join(args.output_dir, file)
+    #     label_file = os.path.join(args.label_dir, file)
+    #     segment_label(seg_file, detect_file, label_file)
+    #     logger.info(f'{file} 合并结果已经保存！！')
