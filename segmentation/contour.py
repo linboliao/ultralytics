@@ -15,64 +15,64 @@ import traceback
 from segmentation.wsi import WSIOperator
 
 
-def get_contours(image):
-    """检测图像中的轮廓，使用改进的颜色范围和处理流程"""
-    # 使用更精确的颜色范围
-    lower_bound = np.array([10, 10, 10])
-    upper_bound = np.array([210, 190, 180])
-    # 基底
-    # lower_bound = np.array([0, 0, 220])
-    # upper_bound = np.array([240, 100, 100])
-    image = np.array(image)
-    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-
-    # 添加黑色边框避免边界效应
-    image = cv2.copyMakeBorder(image, 3, 3, 3, 3, cv2.BORDER_CONSTANT, value=(0, 0, 0))
-
-    # 使用HSV颜色空间提升检测鲁棒性
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, lower_bound, upper_bound)
-
-    # 形态学操作改善轮廓完整性
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-    # 检测轮廓并加入面积筛选
-    contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-    return contours, hierarchy
-
-
 # def get_contours(image):
+#     """检测图像中的轮廓，使用改进的颜色范围和处理流程"""
+#     # 使用更精确的颜色范围
+#     lower_bound = np.array([10, 10, 10])
+#     upper_bound = np.array([210, 190, 180])
+#     # 基底
+#     # lower_bound = np.array([0, 0, 220])
+#     # upper_bound = np.array([240, 100, 100])
 #     image = np.array(image)
 #     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-#     # 1. 色彩增强（突出棕褐色腺体区域）
+#
+#     # 添加黑色边框避免边界效应
+#     image = cv2.copyMakeBorder(image, 3, 3, 3, 3, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+#
+#     # 使用HSV颜色空间提升检测鲁棒性
 #     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-#     # 调整饱和度和明度通道增强对比
-#     h, s, v = cv2.split(hsv)
-#     s = cv2.multiply(s, 1.5).clip(0, 255).astype(np.uint8)  # 增加饱和度
-#     v = cv2.multiply(v, 1.2).clip(0, 255).astype(np.uint8)  # 增加亮度
-#     enhanced_hsv = cv2.merge([h, s, v])
-#     enhanced = cv2.cvtColor(enhanced_hsv, cv2.COLOR_HSV2BGR)
+#     mask = cv2.inRange(hsv, lower_bound, upper_bound)
 #
-#     # 2. 转换为灰度图并应用高斯模糊
-#     gray = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
-#     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+#     # 形态学操作改善轮廓完整性
+#     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+#     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 #
-#     # 3. 应用大津法自动阈值
-#     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-#
-#     # 4. 形态学处理优化分割结果
-#     kernel = np.ones((1, 1), np.uint8)
-#     opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
-#     closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=3)
-#
-#     # 5. 查找轮廓（仅外部轮廓）
-#     contours, hierarchy = cv2.findContours(
-#         closed,
-#         cv2.RETR_EXTERNAL,
-#         cv2.CHAIN_APPROX_SIMPLE
-#     )
+#     # 检测轮廓并加入面积筛选
+#     contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
 #     return contours, hierarchy
+
+
+def get_contours(image):
+    image = np.array(image)
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    # 1. 色彩增强（突出棕褐色腺体区域）
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    # 调整饱和度和明度通道增强对比
+    h, s, v = cv2.split(hsv)
+    s = cv2.multiply(s, 1.5).clip(0, 255).astype(np.uint8)  # 增加饱和度
+    v = cv2.multiply(v, 1.2).clip(0, 255).astype(np.uint8)  # 增加亮度
+    enhanced_hsv = cv2.merge([h, s, v])
+    enhanced = cv2.cvtColor(enhanced_hsv, cv2.COLOR_HSV2BGR)
+
+    # 2. 转换为灰度图并应用高斯模糊
+    gray = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+
+    # 3. 应用大津法自动阈值
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    # 4. 形态学处理优化分割结果
+    kernel = np.ones((1, 1), np.uint8)
+    opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+    closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=3)
+
+    # 5. 查找轮廓（仅外部轮廓）
+    contours, hierarchy = cv2.findContours(
+        closed,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+    return contours, hierarchy
 
 
 class Contouring:
@@ -291,10 +291,10 @@ class GeoContouring(Contouring):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/20250104/', help='patch directory')
-parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/CK', help='patch directory')
-parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/slide', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/label', help='output directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716', help='patch directory')
+parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/ihc', help='patch directory')
+parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/slides', help='patch directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/label', help='output directory')
 parser.add_argument('--patch_size', type=int, default=4096, help='patch size')
 parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
 parser.add_argument('--slide_list', type=list)

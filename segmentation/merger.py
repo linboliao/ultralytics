@@ -127,12 +127,12 @@ class GeoJSONProcessor:
         self.points_dir = points_dir
         self.ihc_ext = ihc_ext
         self.simplify_tolerance = simplify_tolerance
-        # try:
-        #     self.transform_params = self.get_reg_param()
-        # except FileNotFoundError:
-        #     self.transform_params = None
-        #     logger.info(f'{Path(self.input_path).stem} 无配准点，跳过')
-        #     return
+        try:
+            self.transform_params = self.get_reg_param()
+        except FileNotFoundError:
+            self.transform_params = None
+            logger.info(f'{Path(self.input_path).stem} 无配准点，跳过')
+            return
         self.load_data()
 
     def load_data(self):
@@ -447,13 +447,13 @@ class GeoJSONProcessor:
             lambda geom: self.remove_small_holes(geom, min_area=5000)
         )
 
-        # transform_params = self.transform_params
-        # if not self.transform_params:
-        #     return
+        transform_params = self.transform_params
+        if not self.transform_params:
+            return
         # 仿射变换
-        # result_gdf['geometry'] = result_gdf['geometry'].apply(
-        #     lambda geom: self.transform_geometry(geom, transform_params)
-        # )
+        result_gdf['geometry'] = result_gdf['geometry'].apply(
+            lambda geom: self.transform_geometry(geom, transform_params)
+        )
 
         # 平滑
         # result_gdf['geometry'] = result_gdf['geometry'].apply(
@@ -463,9 +463,9 @@ class GeoJSONProcessor:
         # buffered = unary_union(result_gdf.geometry)
         # result_gdf = gpd.GeoDataFrame(geometry=[buffered], crs=self.crs)
         result_gdf = self.union(result_gdf)
-        result_gdf['geometry'] = result_gdf['geometry'].apply(
-            lambda geom: geom.simplify(tolerance=2)  # 示例容差10米
-        )
+        # result_gdf['geometry'] = result_gdf['geometry'].apply(
+        #     lambda geom: geom.simplify(tolerance=2)  # 示例容差10米
+        # )
         result_gdf['geometry'] = result_gdf['geometry'].apply(self.remove_holes)
         gdf_separated = result_gdf.explode(ignore_index=True)
         gdf_separated.to_file(self.output_path, driver='GeoJSON')
@@ -531,6 +531,14 @@ def segment_label(seg_path, detect_path, output_path, area_ratio_threshold=0.2):
     seg_gdf = gpd.read_file(seg_path)
     detect_gdf = gpd.read_file(detect_path)
 
+    detect_gdf = detect_gdf[
+        detect_gdf['classification'].apply(
+            lambda s:
+            json.loads(s).get('name') if s is not None
+            else json.loads('{ "name": "cancer", "color": [255, 0, 0] }').get('name')
+        ) != 'Other'
+        ]
+
     # 确保坐标系一致
     if seg_gdf.crs != detect_gdf.crs:
         detect_gdf = detect_gdf.to_crs(seg_gdf.crs)
@@ -561,11 +569,11 @@ def segment_label(seg_path, detect_path, output_path, area_ratio_threshold=0.2):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment', help='patch directory')
-parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/segment', help='patch directory')
+parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/nnunet', help='patch directory')
 parser.add_argument('--point_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/points', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/merger', help='output directory')
-parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0318/result', help='output directory')
-parser.add_argument('--label_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0318/merger', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/merger', help='output directory')
+parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/old', help='output directory')
+parser.add_argument('--label_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/merger-new', help='output directory')
 parser.add_argument('--patch_size', type=int, default=1024, help='patch size')
 parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
 if __name__ == "__main__":
