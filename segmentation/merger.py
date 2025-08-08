@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import time
 import warnings
 
 import geopandas as gpd
@@ -23,6 +24,9 @@ from segmentation.wsi import WSIOperator
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 BUFFER_SIZE = 10
+import warnings
+
+warnings.filterwarnings("ignore")  # 忽略所有警告[1,2,5](@ref)
 
 
 def affine_transform(points, a, b, c, d, e, f):
@@ -473,9 +477,7 @@ class GeoJSONProcessor:
         # )
         import geopandas as gpd
 
-
         # 计算每个几何图形的面积（单位：坐标系单位）
-
 
         # 保存结果
         # result_gdf['geometry'] = result_gdf['geometry'].apply(self.remove_holes)
@@ -570,7 +572,6 @@ def segment_label(seg_path, detect_path, output_path, area_ratio_threshold=0.2):
         rsuffix="g"
     )
 
-
     # 新增：计算相交面积占比并过滤
     def check_intersection_area(row, seg_gdf):
         # 获取 seg_gdf 中的原始几何
@@ -585,7 +586,6 @@ def segment_label(seg_path, detect_path, output_path, area_ratio_threshold=0.2):
         # 计算相交面积占比
         area_ratio = intersection.area / seg_geom.area
         return area_ratio > 0.35  # 阈值设为20%
-
 
     # 应用过滤条件
     valid_mask = intersected.apply(
@@ -606,11 +606,267 @@ def segment_label(seg_path, detect_path, output_path, area_ratio_threshold=0.2):
     seg_gdf.to_file(output_path, driver="GeoJSON")
 
 
+import numpy as np
+from shapely.geometry import Polygon, MultiPolygon
+
+import geopandas as gpd
+from shapely.ops import unary_union
+
+
+def nnunet(in_path, out_path, buffer=2):
+    gdf = gpd.read_file(in_path)
+    # 步骤1: 所有几何对象膨胀2像素
+    gdf = gdf.copy()  # 避免修改原始数据
+    gdf['buffered'] = gdf.geometry.buffer(buffer)  # 安全：直接覆盖新列
+
+    # 步骤2: 合并相交的几何元素
+    merged_geom = unary_union(gdf['buffered'].tolist())
+    merged_polys = list(merged_geom.geoms) if merged_geom.geom_type == 'MultiPolygon' else [merged_geom]
+
+    # 步骤3: 为合并后的几何体分配属性
+    results = []
+    for poly in merged_polys:
+        # 定位与当前合并多边形相交的原始几何（非膨胀状态）
+        intersecting = gdf[gdf.geometry.intersects(poly)]
+
+        if not intersecting.empty:
+            # ✅ 修复点：使用.loc显式赋值避免警告
+            intersecting.loc[:, 'area'] = intersecting.geometry.area  # 安全添加临时列
+            largest = intersecting.loc[intersecting['area'].idxmax()]
+            results.append({
+                'geometry': poly,
+                'classification': largest['classification']
+            })
+
+    merged_gdf = gpd.GeoDataFrame(results, crs=gdf.crs)
+
+    # 步骤4: 腐蚀操作（收缩2像素）
+    merged_gdf.geometry = merged_gdf.geometry.buffer(-buffer)  # 安全：直接覆盖几何列
+    merged_gdf["area"] = merged_gdf.geometry.area
+
+    # 筛选面积 ≥ x 的要素
+    merged_gdf['geometry'] = merged_gdf['geometry'].apply(
+        lambda geom: geom.simplify(tolerance=2)  # 示例容差10米
+    )
+    merged_gdf = merged_gdf[merged_gdf["area"] >= 2000]  # x 为面积阈值（单位需与坐标系一致）
+    merged_gdf.to_file(out_path, driver="GeoJSON")
+
+
+from shapely import is_valid
+import geopandas as gpd
+from shapely.validation import make_valid
+from shapely.geometry import Polygon, MultiPolygon
+
+
+def nnunet2(in_path, out_path, buffer=2, min_area=2000):
+    # 1. 读取数据并修复几何
+    gdf = gpd.read_file(in_path)
+    gdf.geometry = gdf.geometry.apply(
+        lambda geom: make_valid(geom) if not is_valid(geom) else geom
+    )
+
+    # 2. 创建缓冲区并计算原始面积
+    gdf['buffered'] = gdf.geometry.buffer(buffer)
+    gdf['orig_area'] = gdf.geometry.area  # 保存原始面积
+
+    # 3. 按分类溶解几何（保留最大原始面积属性）
+    dissolved = gdf.dissolve(
+        by='classification',
+        aggfunc={'orig_area': 'max'},
+        as_index=False
+    )
+
+    # 4. 计算融合后几何的实际面积
+    dissolved['fused_area'] = dissolved.geometry.area
+
+    # 5. 面积筛选和拓扑修复
+    result = dissolved[dissolved['fused_area'] >= min_area].copy()
+    result.geometry = result.geometry.apply(
+        lambda geom: geom.buffer(0) if not geom.is_valid else geom
+    )
+
+    # 6. 过滤空几何并输出
+    result = result[~result.is_empty]
+    result.to_file(out_path, driver="GeoJSON")
+
+
+import geopandas as gpd
+from shapely.ops import unary_union
+from shapely.validation import make_valid
+import os
+
+
+def nnunet3(in_path, out_path, buffer=2, min_area=2000):
+    # 1. 读取数据并修复几何有效性
+    gdf = gpd.read_file(in_path)
+
+    # 修复无效几何（关键步骤！）
+    gdf.geometry = gdf.geometry.apply(
+        lambda geom: make_valid(geom) if not geom.is_valid else geom
+    )
+
+    # 2. 确保使用投影坐标系（避免缓冲区距离失真）
+    if gdf.crs.is_geographic:
+        gdf = gdf.to_crs(epsg=3857)  # Web墨卡托投影[7](@ref)
+
+    # 3. 添加原始面积列（用于后续属性继承）
+    gdf['orig_area'] = gdf.geometry.area
+
+    # 4. 创建缓冲区并合并几何
+    gdf['buffered'] = gdf.geometry.buffer(buffer)
+    merged_geom = unary_union(gdf['buffered'].tolist())
+
+    # 5. 创建临时合并图层
+    merged_gdf = gpd.GeoDataFrame(geometry=[merged_geom], crs=gdf.crs)
+
+    # 6. 空间连接：关联原始属性（优化查询性能）
+    merged_with_attr = gpd.sjoin(
+        merged_gdf,
+        gdf[['geometry', 'classification', 'orig_area']],  # 仅选择必要列
+        how='left',
+        predicate='intersects'
+    )
+
+    # 7. 按原始面积继承最大分类属性
+    if not merged_with_attr.empty:
+        # 分组统计每个分类的总面积
+        class_areas = merged_with_attr.groupby('classification')['orig_area'].sum()
+        # 选择总面积最大的分类
+        final_classification = class_areas.idxmax()
+
+        # 8. 创建结果GeoDataFrame
+        result_gdf = gpd.GeoDataFrame({
+            'geometry': [merged_geom],
+            'classification': [final_classification],
+            'total_area': [merged_geom.area]
+        }, crs=gdf.crs)
+
+        # 9. 面积筛选和拓扑修复
+        result_gdf = result_gdf[result_gdf.total_area >= min_area]
+        result_gdf.geometry = result_gdf.geometry.apply(
+            lambda geom: make_valid(geom.buffer(0)) if not geom.is_valid else geom
+        )
+
+        # 10. 保存结果（自动创建目录）
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        result_gdf.to_file(out_path, driver='GeoJSON')
+    else:
+        print("警告：空间连接未匹配到任何要素")
+
+
+import geopandas as gpd
+import json
+from shapely.ops import unary_union
+
+import geopandas as gpd
+import json
+from shapely.ops import unary_union
+
+
+def merge_seg_detection(
+        seg_path,
+        detect_path,
+        output_path,
+        area_ratio_threshold=0.15,
+        buffer_size=2,
+        min_area=2000
+):
+    # ===== 1. 数据读取与预处理 =====
+    seg_gdf = gpd.read_file(seg_path)
+    detect_gdf = gpd.read_file(detect_path)
+
+    def parse_classification(s):
+        try:
+            return json.loads(s).get('name')
+        except:
+            return 'prostate'
+
+    detect_gdf = detect_gdf[detect_gdf['classification'].apply(parse_classification) == 'prostate']
+
+    if seg_gdf.crs != detect_gdf.crs:
+        detect_gdf = detect_gdf.to_crs(seg_gdf.crs)
+
+    # ===== 2. 几何合并（不处理分类） =====
+    def buffer_merge(gdf, buffer, min_area):
+        buffered = gdf.geometry.buffer(buffer)
+        merged_geom = unary_union(buffered.tolist())
+        merged_polys = list(merged_geom.geoms) if merged_geom.geom_type == 'MultiPolygon' else [merged_geom]
+        merged_gdf = gpd.GeoDataFrame(geometry=merged_polys, crs=gdf.crs)
+        merged_gdf.geometry = merged_gdf.geometry.buffer(-buffer)
+        merged_gdf['area'] = merged_gdf.geometry.area
+        return merged_gdf[merged_gdf['area'] >= min_area]
+
+    merged_seg = buffer_merge(seg_gdf, buffer_size, min_area)
+    merged_seg['classification'] = None  # 初始化分类列
+
+    # ===== 3. Detect数据赋值分类 =====
+    intersected = gpd.sjoin(
+        detect_gdf[["geometry", "classification"]],
+        merged_seg,
+        how="inner", predicate="intersects", lsuffix="d", rsuffix="g"
+    )
+
+    def calc_area_ratio(row):
+        seg_geom = merged_seg.loc[row["index_g"], 'geometry']
+        intersection = row['geometry'].intersection(seg_geom)
+        return intersection.area / seg_geom.area if not intersection.is_empty else 0.0
+
+    intersected["area_ratio"] = intersected.apply(calc_area_ratio, axis=1)
+    valid_intersections = intersected[intersected["area_ratio"] > area_ratio_threshold]
+
+    update_idx = valid_intersections["index_g"]
+    merged_seg.loc[update_idx, "classification"] = valid_intersections["classification_d"].values
+
+    # ===== 4. 未覆盖区域：继承原始最大相交分类 =====
+    from shapely.validation import make_valid
+
+    # 修复几何有效性函数
+    def fix_invalid_geom(geom):
+        if not geom.is_valid:
+            # 方法1: 使用 buffer(0) 修复简单拓扑错误
+            fixed_geom = geom.buffer(0)
+            # 方法2: 复杂错误使用 make_valid（Shapely 2.0+）
+            try:
+                from shapely.validation import make_valid
+                fixed_geom = make_valid(geom)
+            except ImportError:
+                pass
+            return fixed_geom if fixed_geom.is_valid else geom
+        return geom
+
+    # 修复 merged_seg 和 seg_gdf 中的几何
+    merged_seg['geometry'] = merged_seg['geometry'].apply(fix_invalid_geom)
+    seg_gdf['geometry'] = seg_gdf['geometry'].apply(fix_invalid_geom)
+    uncovered_mask = merged_seg['classification'].isnull()
+    seg_gdf_sindex = seg_gdf.sindex  # 创建空间索引[7](@ref)
+
+    for idx, row in merged_seg[uncovered_mask].iterrows():
+        # 通过空间索引快速定位候选几何
+        candidate_idx = list(seg_gdf_sindex.intersection(row.geometry.bounds))
+        candidates = seg_gdf.iloc[candidate_idx]
+
+        # 精确筛选实际相交的几何
+        intersecting = candidates[candidates.intersects(row.geometry)]
+
+        if not intersecting.empty:
+            # 选择面积最大的原始几何并继承其分类
+            largest = intersecting.loc[intersecting.geometry.area.idxmax()]
+            merged_seg.at[idx, 'classification'] = largest['classification']
+        else:
+            # 无相交时的兜底方案
+            global_largest = seg_gdf.loc[seg_gdf.geometry.area.idxmax(), 'classification']
+            merged_seg.at[idx, 'classification'] = global_largest
+
+    # ===== 5. 输出结果 =====
+    merged_seg['geometry'] = merged_seg.geometry.simplify(buffer_size)
+    merged_seg.to_file(output_path, driver="GeoJSON")
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment', help='patch directory')
 parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/nnunet', help='patch directory')
 parser.add_argument('--point_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/points', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/merger', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/merger-2', help='output directory')
 parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/yolo_detect', help='output directory')
 parser.add_argument('--label_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/label', help='output directory')
 parser.add_argument('--patch_size', type=int, default=1024, help='patch size')
@@ -642,14 +898,23 @@ if __name__ == "__main__":
     #         seg_path=os.path.join(args.output_dir, file),
     #         output_path=os.path.join(args.output_dir, file.replace('.geojson', '-new.geojson')),
     #     )
-    files = os.listdir(args.output_dir)
-    files = [file for file in files if not file.endswith('-CK.geojson') and not file.endswith('-cancer.geojson')]
+    # files = os.listdir(args.output_dir)
+    # files = [file for file in files if not file.endswith('-CK.geojson') and not file.endswith('-cancer.geojson')]
+    # for file in files:
+    #     detect_file = os.path.join(args.detect_dir, file)
+    #     if not os.path.isfile(detect_file):
+    #         logger.info(f'detect file {file} not exists')
+    #         continue
+    #     seg_file = os.path.join(args.output_dir, file)
+    #     label_file = os.path.join(args.label_dir, file)
+    #     segment_label(seg_file, detect_file, label_file)
+    #     logger.info(f'{file} 合并结果已经保存！！')
+    files = os.listdir(args.input_dir)
     for file in files:
-        detect_file = os.path.join(args.detect_dir, file)
-        if not os.path.isfile(detect_file):
-            logger.info(f'detect file {file} not exists')
-            continue
-        seg_file = os.path.join(args.output_dir, file)
-        label_file = os.path.join(args.label_dir, file)
-        segment_label(seg_file, detect_file, label_file)
-        logger.info(f'{file} 合并结果已经保存！！')
+        start = time.time()
+        in_path = os.path.join(args.input_dir, file)
+        detect_path = os.path.join(args.detect_dir, file)
+        out_path = os.path.join(args.output_dir, file)
+        nnunet(in_path, out_path, 3)
+        merge_seg_detection(in_path, detect_path, out_path, 0.2, 2)
+        print(time.time() - start)
