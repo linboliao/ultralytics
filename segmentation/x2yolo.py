@@ -129,11 +129,15 @@ class GeoJSONYOLOConverter(YOLOConverter):
     # }
 
     CLASS_MAPPING = {
-        'no-cancer': 0,
+        'prostate': 0,
         'Negative': 0,
-        'Positive': 0,
+        'non-cancer': 0,
+        'cancer': 1,
+        'Positive': 1,
         'Tumor': 1,
-        'Other': 2,
+        'lymphocyte': 2,
+        'vessle': 2,
+        'nerve': 2,
     }
 
     def __init__(self, *args, **kwargs):
@@ -608,10 +612,10 @@ class MultiMagGeo2YOLO(GeoJSONYOLOConverter):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订')
 parser.add_argument('--slide_dir', type=str, default='')
 parser.add_argument('--label_dir', type=str, default='')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal/dataset/2047')
+parser.add_argument('--output_dir', type=str, default='')
 parser.add_argument('--patch_size', type=int, default=2048)
 parser.add_argument('--patch_level', type=int, default=2)
 parser.add_argument('--num_workers', type=int, default=10)
@@ -620,7 +624,16 @@ parser.add_argument('--seed', type=int, default=42)
 args = parser.parse_args()
 
 if __name__ == '__main__':
-    converter = GeoJSONYOLOConverter(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
+    # converter = GeoJSONYOLOConverter(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
     # converter = MultiMagGeo2YOLO(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
     # converter = KVYOLOConverter(data_root=args.data_root, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
-    converter.run(num_workers=args.num_workers)
+    datas = [
+        '/NAS2/Data1/lbliao/Data/MXB/segment/0716',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/无癌病例',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/补充的分割图像',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/补充神经节标注',
+    ]
+    for data in datas:
+        converter = GeoJSONYOLOConverter(data_root=data, slide_dir=args.slide_dir, label_dir=args.label_dir, output_dir=args.output_dir, patch_size=args.patch_size, patch_level=args.patch_level)
+        converter.run(num_workers=args.num_workers)
