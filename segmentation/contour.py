@@ -7,6 +7,7 @@ import os
 import json
 
 from loguru import logger
+from scipy.optimize import curve_fit
 from shapely.validation import make_valid
 from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString, MultiLineString
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -40,6 +41,78 @@ from segmentation.wsi import WSIOperator
 #     # 检测轮廓并加入面积筛选
 #     contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
 #     return contours, hierarchy
+
+def affine_transform(points, a, b, c, d, e, f):
+    """
+    Apply an affine transformation to a set of 2D points.
+    Parameters:
+    - points: The input points (numpy array of shape [n, 2]).
+    - a, b, c, d, e, f: The affine transformation parameters.
+
+    Returns:
+    - transformed_points: The transformed points (numpy array of shape [n, 2]).
+    """
+    # Perform the affine transformation
+    # The points are expected to be in the form of [x, y]
+    x_new = a * points[:, 0] + b * points[:, 1] + c
+    y_new = d * points[:, 0] + e * points[:, 1] + f
+
+    return np.column_stack((x_new, y_new)).flatten()
+
+
+def generate_param(src_points, dst_points, filename, output_path):
+    points1, points2 = src_points, dst_points.flatten()
+    popt, _ = curve_fit(affine_transform, points1, points2, p0=[0, 0, 0, 0, 0, 0])
+    result = {filename: list(popt)}
+    with open(output_path, 'w') as f:
+        json.dump(result, f)
+
+
+def geojson2txt(filepath, typ='.geojson'):
+    # 通常一批文件放在一个路径下
+    file_list = os.listdir(filepath)
+    for file in file_list:
+        if not file.endswith(typ):
+            continue
+        json_path = os.path.join(filepath, file)
+        txt_path = json_path.replace(typ, '.txt')
+        with open(json_path, 'r') as f:
+            json_data = json.load(f)
+
+        with open(txt_path, 'w') as txt:
+            coordinates = json_data.get('features', [])[0].get('geometry', {}).get('coordinates', [])
+            for coord in coordinates:
+                x_value = coord[0]
+                y_value = coord[1]
+                txt.write("x:{}, y:{}\n".format(x_value, y_value))
+
+
+def json2txt(filepath):
+    file_list = os.listdir(filepath)
+    for file in file_list:
+        if not file.endswith('.json'):
+            continue
+        json_path = os.path.join(filepath, file)
+        txt_path = json_path.replace('.json', '.txt')
+        with open(json_path, 'r') as f:
+            json_data = json.load(f)
+
+        with open(txt_path, 'w') as txt:
+            for point in json_data:
+                region = point.get("region", {})
+                x, y = region.get("x", 0), region.get("y", 0)
+                txt.write("x:{}, y:{}\n".format(x, y))
+
+
+def get_points_from_txt(file_path):
+    points = []
+    with open(file_path, 'r') as file:
+        for line in file:
+            values = line.strip().split(',')
+            x_value = int(float(values[0].split(':')[1].strip()))
+            y_value = int(float(values[1].split(':')[1].strip()))
+            points.append([x_value, y_value])
+    return np.array(points)
 
 
 def get_contours(image):
@@ -85,6 +158,8 @@ class Contouring:
         self.ihc_ext = opt.ihc_ext
         self.slide_list = opt.slide_list if opt.slide_list else []
         os.makedirs(self.output_dir, exist_ok=True)
+        json2txt(self.points_dir)
+
 
     @property
     def slides(self):
@@ -125,8 +200,20 @@ class GeoContouring(Contouring):
         # 初始化注册参数
         self.reg_params_cache = {}
 
-    def process_slide_patch(self, w_s, h_s, wsi, step):
+    def get_reg_param(self, filename):
+        # he_points = get_points_from_txt(os.path.join(self.points_dir, f'{filename}.txt'))
+        # ihc_points = get_points_from_txt(os.path.join(self.points_dir, f'{filename}-{self.ihc_ext}.txt'))
+        ihc_file = filename.replace(self.ihc_ext, '')
+        points1 = get_points_from_txt(os.path.join(self.points_dir, f'{filename}.txt'))
+        points2 = get_points_from_txt(os.path.join(self.points_dir, f'{ihc_file}.txt'))
+        points2 = points2.flatten()
+        popt, _ = curve_fit(affine_transform, points1, points2, p0=[0, 0, 0, 0, 0, 0])
+        return list(popt)
+
+    def process_slide_patch(self, w_s, h_s, wsi, step, basename):
         """处理单个切片块"""
+        (a, b, c, d, e, f) = self.get_reg_param(basename)
+
         width, height = wsi.level_dimensions[0]
         x, y = min(step, width - w_s), min(step, height - h_s)
         input_img = wsi.read_region((w_s, h_s), 0, (x, y), check_background=True)
@@ -148,8 +235,10 @@ class GeoContouring(Contouring):
                 continue
             # 添加坐标偏移
             cnt = cnt - 3 + np.array([w_s, h_s])
-
-            # 创建特征
+            cnt = np.squeeze(cnt, axis=1)
+            cnt = affine_transform(cnt, a, b, c, d, e, f)
+            cnt = np.reshape(cnt, (len(cnt) // 2, 1, 2))
+            cnt = np.int32(cnt)  # 或者使用 np.float32
             feature = self.create_feature(cnt)
             if feature:
                 features.extend(feature)
@@ -268,7 +357,7 @@ class GeoContouring(Contouring):
         # 使用网格步长处理
         for w_s in range(0, width, step):
             for h_s in range(0, height, step):
-                patch_features = self.process_slide_patch(w_s, h_s, wsi, step)
+                patch_features = self.process_slide_patch(w_s, h_s, wsi, step, base_name)
                 features.extend(patch_features)
 
         # # 保存结果
@@ -291,12 +380,12 @@ class GeoContouring(Contouring):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716', help='patch directory')
-parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/ihc', help='patch directory')
-parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/slides', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/0716/label', help='output directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射', help='patch directory')
+parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射/IHC', help='patch directory')
+parser.add_argument('--ihc_slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射/slides', help='patch directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射/contour', help='output directory')
 parser.add_argument('--patch_size', type=int, default=4096, help='patch size')
-parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
+parser.add_argument('--ihc_ext', type=str, default='-CKpan', help='patch size')
 parser.add_argument('--slide_list', type=list)
 if __name__ == '__main__':
     args = parser.parse_args()
