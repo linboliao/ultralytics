@@ -14,10 +14,10 @@ parser.add_argument('--ckpt', type=list, default=[
     '/data2/lbliao/Code/ultralytics/runs/detect/train/weights/best.pt',
     '/data2/lbliao/Code/ultralytics/runs/detect/pki/weights/best.pt'
 ])
-parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/seminal', help='patch directory')
-parser.add_argument('--gpu', type=str, default='0', help='patch directory')
-parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/测试一/slides', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/classification/测试一/result', help='output directory')
+parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射', help='patch directory')
+parser.add_argument('--gpu', type=str, default='3', help='patch directory')
+parser.add_argument('--slide_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射/slides', help='patch directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射/yolo', help='output directory')
 parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
 parser.add_argument('--infer_size', type=int, default=1536, help='patch size')
 parser.add_argument('--slide_list', type=list, default=[])

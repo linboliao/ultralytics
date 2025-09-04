@@ -615,6 +615,9 @@ from shapely.ops import unary_union
 
 def nnunet(in_path, out_path, buffer=2):
     gdf = gpd.read_file(in_path)
+    gdf['geometry'] = gdf['geometry'].apply(
+        lambda geom: geom.simplify(tolerance=5)  # 示例容差10米
+    )
     # 步骤1: 所有几何对象膨胀2像素
     gdf = gdf.copy()  # 避免修改原始数据
     gdf['buffered'] = gdf.geometry.buffer(buffer)  # 安全：直接覆盖新列
@@ -864,11 +867,11 @@ def merge_seg_detection(
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data_root', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment', help='patch directory')
-parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/nnunet', help='patch directory')
+parser.add_argument('--input_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射/label', help='patch directory')
 parser.add_argument('--point_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/points', help='patch directory')
-parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/merger-2', help='output directory')
-parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/yolo_detect', help='output directory')
-parser.add_argument('--label_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/Detection/0425/label', help='output directory')
+parser.add_argument('--output_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射/result', help='output directory')
+parser.add_argument('--detect_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射/yolo', help='output directory')
+parser.add_argument('--label_dir', type=str, default='/NAS2/Data1/lbliao/Data/MXB/segment/YNZL映射/result', help='output directory')
 parser.add_argument('--patch_size', type=int, default=1024, help='patch size')
 parser.add_argument('--ihc_ext', type=str, default='-CK', help='patch size')
 if __name__ == "__main__":
@@ -912,6 +915,7 @@ if __name__ == "__main__":
     files = os.listdir(args.input_dir)
     for file in files:
         start = time.time()
+        print(f'start{file}')
         in_path = os.path.join(args.input_dir, file)
         detect_path = os.path.join(args.detect_dir, file)
         out_path = os.path.join(args.output_dir, file)
