@@ -127,7 +127,8 @@ class GeoJSON2YOLO(X2YOLO):
                 shapes.append((geom, fill_value))
 
         if unknown_class:
-            print(f"发现未知分类: {unknown_class}")
+            filename = self.wsi.filename
+            print(f"发现未知分类: {unknown_class}; slide {filename}")
 
         return shapes
 
