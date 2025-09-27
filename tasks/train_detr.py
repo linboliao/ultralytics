@@ -1,6 +1,6 @@
 import argparse
 
-from ultralytics import YOLO
+from ultralytics import RTDETR
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--ckpt', type=str)
@@ -12,6 +12,6 @@ parser.add_argument('--batch', type=int)
 parser.add_argument('--lr0', type=float)
 args = parser.parse_args()
 
-model = YOLO(args.ckpt)
+model = RTDETR(args.ckpt)
 
 results = model.train(data=args.data, epochs=args.epoches, imgsz=args.image_size, device=args.gpu_ids, batch=args.batch, patience=200, lr0=args.lr0)
