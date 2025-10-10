@@ -310,10 +310,9 @@ def find_all_wsi_paths(wsi_root, extentions):
     else:
         all_paths = glob.glob(os.path.join(wsi_root, '**'), recursive=True)
     for ext in extentions.split(';'):
-        logger.info('Process format:', ext)
-        ext = ext[1:]
-        all_paths = [i for i in all_paths if i.split('.')[-1].lower() == ext.lower()]
-        for h in all_paths:
+        logger.info(f'Process format:{ext}')
+        paths = [i for i in all_paths if os.path.splitext(i)[1].lower() == ext.lower()]
+        for h in paths:
             slide_name = os.path.split(h)[1]
             slide_id = os.path.splitext(slide_name)[0]
             result[slide_id] = h
