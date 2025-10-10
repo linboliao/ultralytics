@@ -1,29 +1,15 @@
 import os
 
-import pandas as pd
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import cv2
 import numpy as np
+import pandas as pd
 import argparse
 
 from PIL import Image, ImageDraw
 from loguru import logger
 
-from ultralytics import YOLO
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--ckpt', type=str, default='/data2/lbliao/Code/ultralytics/runs/segment/train5/weights/best.pt')
-parser.add_argument('--data', type=str, default='/data2/lbliao/Code/ultralytics/segmentation/cfg/data/segment.yaml')
-args = parser.parse_args()
-
-model = YOLO(args.ckpt)
-
-model.val(data=args.data, split='test')
-
-
-image_dir = "/NAS2/Data1/lbliao/Data/MXB/segment/dataset/2048/test/images"  # 测试集路径
-label_dir = "/NAS2/Data1/lbliao/Data/MXB/segment/dataset/2048/test/labels"  # 真实掩码路径
+from ultralytics import YOLO, YOLOE, RTDETR, YOLOWorld
+from ultralytics.data.utils import check_det_dataset
 
 
 def yolo2mask(label_path, img_size=(512, 512), num_classes=None):
@@ -74,6 +60,8 @@ def multi_class_metrics(pred_mask, true_mask):
     iou_scores = []
     dice_scores = []
     for c in range(pred_mask.shape[0]):
+        if c == 0:
+            continue
         pred_bin = (pred_mask[c] > 0.5).astype(int)  # 二值化预测 → 0/1
         true_bin = (true_mask[c] > 0.5).astype(int)  # 二值化真实 → 0/1
         if np.sum(pred_bin) == 0 and np.sum(true_bin) == 0:
@@ -95,7 +83,7 @@ def calculate(images_dir, labels_dir, num_classes):
         # 加载图像获取尺寸
         img_path = os.path.join(images_dir, img_name)
         img = cv2.imread(img_path)
-        img = cv2.resize(img, (896, 896))
+        img = cv2.resize(img, (1024, 1024))
         h, w = img.shape[:2]
 
         # 生成真实掩码
@@ -104,21 +92,20 @@ def calculate(images_dir, labels_dir, num_classes):
         results = model.predict(img)
 
         # 初始化全图预测掩码（背景类别为0）
-        pred_mask = np.zeros((num_classes, h, w), dtype=np.uint8)
-
+        pred_mask = np.zeros((num_classes + 1, h, w), dtype=np.uint8)
         if results[0].masks is not None:
-            masks_tensor = results[0].masks.data.cpu().numpy()  # [N, H, W]
-
-            # 处理每个实例
+            masks_tensor = results[0].masks.data.cpu().numpy()
             for i, mask in enumerate(masks_tensor):
-                # 二值化处理
                 binary_mask = (mask > 0.5).astype(np.uint8)
 
-                # 获取实例类别ID（背景为0，其他从1开始）
                 cls_id = int(results[0].boxes.cls[i].item())
                 pred_mask[cls_id] = np.logical_or(pred_mask[cls_id], binary_mask).astype(np.uint8)
-
-        result = multi_class_metrics(true_mask, pred_mask)
+            result = multi_class_metrics(true_mask, pred_mask)
+        elif true_mask.max() > 0:
+            result = {'dice': 0, 'iou': 0}
+        else:
+            # result = {'dice': 1, 'iou': 1}
+            continue
         iou_scores.append(result.get('iou'))
         dice_scores.append(result.get('dice'))
     iou_scores = pd.Series(iou_scores).dropna().tolist()
@@ -127,5 +114,34 @@ def calculate(images_dir, labels_dir, num_classes):
 
 
 if __name__ == "__main__":
-    metrics = calculate(image_dir, label_dir, 4)
-    logger.info(f"\n数据集平均dice: {metrics.get('dice'):.4f}, 平均iou: {metrics.get('iou'):.4f}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', type=str, required=True, choices=['yolo', 'rtdetr', 'yoloe', 'yoloworld'], help='Model type to test: yolo, rtdetr, or yoloe')
+    parser.add_argument('--ckpt', type=str)
+    parser.add_argument('--data', type=str)
+    parser.add_argument('--phase', type=str)
+    parser.add_argument('--name', type=str)
+    args = parser.parse_args()
+
+    if args.model == 'yolo':
+        model = YOLO(args.ckpt)
+    elif args.model == 'rtdetr':
+        model = RTDETR(args.ckpt)
+    elif args.model == 'yoloe':
+        model = YOLOE(args.ckpt)
+    elif args.model == 'yoloworld':
+        model = YOLOWorld(args.ckpt)
+    else:
+        raise ValueError(f"Unsupported model type: {args.model}")
+
+    metrics = model.val(data=args.data, split=args.phase, name=args.name)
+    print(metrics)
+
+    data = check_det_dataset(args.data)
+    img_dirs = data.get(args.phase)
+    label_dirs = [d.replace('/images', '/labels') for d in img_dirs]
+    mask_dirs = [d.replace('/images', '/masks') for d in img_dirs]
+    for img_dir, label_dirs in zip(img_dirs, label_dirs):
+        metrics = calculate(img_dir, label_dirs, 3)
+        logger.info(f"\n数据集平均dice: {metrics.get('dice'):.4f}, 平均iou: {metrics.get('iou'):.4f}")
+        #保存log
+
