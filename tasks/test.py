@@ -1,3 +1,4 @@
+import json
 import os
 
 import cv2
@@ -7,9 +8,14 @@ import argparse
 
 from PIL import Image, ImageDraw
 from loguru import logger
+from tqdm import tqdm
 
 from ultralytics import YOLO, YOLOE, RTDETR, YOLOWorld
 from ultralytics.data.utils import check_det_dataset
+
+import warnings
+
+warnings.filterwarnings("ignore")
 
 
 def yolo2mask(label_path, img_size=(512, 512), num_classes=None):
@@ -79,8 +85,7 @@ def calculate(images_dir, labels_dir, num_classes):
     # 遍历图像目录
     iou_scores = []
     dice_scores = []
-    for img_name in os.listdir(images_dir):
-        # 加载图像获取尺寸
+    for img_name in tqdm(os.listdir(images_dir), desc="处理图片"):
         img_path = os.path.join(images_dir, img_name)
         img = cv2.imread(img_path)
         img = cv2.resize(img, (1024, 1024))
@@ -89,7 +94,7 @@ def calculate(images_dir, labels_dir, num_classes):
         # 生成真实掩码
         label_path = os.path.join(labels_dir, os.path.splitext(img_name)[0] + '.txt')
         true_mask = yolo2mask(label_path, (h, w), num_classes)  # 需返回整数类别掩码
-        results = model.predict(img)
+        results = model.predict(img, verbose=False)
 
         # 初始化全图预测掩码（背景类别为0）
         pred_mask = np.zeros((num_classes + 1, h, w), dtype=np.uint8)
@@ -110,7 +115,7 @@ def calculate(images_dir, labels_dir, num_classes):
         dice_scores.append(result.get('dice'))
     iou_scores = pd.Series(iou_scores).dropna().tolist()
     dice_scores = pd.Series(dice_scores).dropna().tolist()
-    return {'dice': np.mean(dice_scores), 'iou': np.mean(iou_scores)}
+    return np.mean(dice_scores), np.mean(iou_scores)
 
 
 if __name__ == "__main__":
@@ -134,14 +139,24 @@ if __name__ == "__main__":
         raise ValueError(f"Unsupported model type: {args.model}")
 
     metrics = model.val(data=args.data, split=args.phase, name=args.name)
-    print(metrics)
+    result = metrics.results_dict
 
     data = check_det_dataset(args.data)
     img_dirs = data.get(args.phase)
     label_dirs = [d.replace('/images', '/labels') for d in img_dirs]
     mask_dirs = [d.replace('/images', '/masks') for d in img_dirs]
+    dice_scores, iou_scores = [], []
     for img_dir, label_dirs in zip(img_dirs, label_dirs):
-        metrics = calculate(img_dir, label_dirs, 3)
-        logger.info(f"\n数据集平均dice: {metrics.get('dice'):.4f}, 平均iou: {metrics.get('iou'):.4f}")
-        #保存log
+        dice, iou = calculate(img_dir, label_dirs, 3)
+        dice_scores.append(dice)
+        iou_scores.append(iou)
+    logger.info(f"\n数据集平均dice: {np.mean(dice_scores):.4f}, 平均iou: {np.mean(iou_scores):.4f}")
+    result.update({'dice': np.mean(dice_scores), 'iou': np.mean(iou_scores)})
+
+    save_path = metrics.save_dir / 'metrics.json'
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    with open(save_path, 'w', encoding='utf-8') as file:
+        json.dump(result, file, ensure_ascii=False, indent=4)
+
 

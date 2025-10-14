@@ -6,9 +6,9 @@ export MKL_THREADING_LAYER=GNU
 export MKL_SERVICE_FORCE_INTEL=1
 
 model=yolo # yolo yoloe rtdetr yoloworld
-ckpt=runs/segment/yolo11m/weights/best.pt
+ckpt=runs/segment/yolo12l/weights/best.pt
 data=tasks/cfg/datasets/segment.yaml
-phase=val
-name=yolo11m_$phase
+phase='test'
+name=yolo12l_$phase
 CUDA_VISIBLE_DEVICES=3 python tasks/test.py --model $model --ckpt $ckpt --data $data --phase $phase --name $name
 #echo --model $model --ckpt $ckpt --data $data --phase $phase --name $name

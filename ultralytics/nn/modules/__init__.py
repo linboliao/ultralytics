@@ -101,6 +101,7 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
+from .PKI import C2f_PKIBlock, C3k2PKI
 
 __all__ = (
     "Conv",
@@ -179,4 +180,6 @@ __all__ = (
     "TorchVision",
     "Index",
     "A2C2f",
+    "C2f_PKIBlock",
+    "C3k2PKI",
 )
