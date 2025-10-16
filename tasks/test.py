@@ -2,6 +2,7 @@ import json
 import os
 
 import cv2
+import torch
 import numpy as np
 import pandas as pd
 import argparse
@@ -12,7 +13,7 @@ from tqdm import tqdm
 
 from ultralytics import YOLO, YOLOE, RTDETR, YOLOWorld
 from ultralytics.data.utils import check_det_dataset
-
+from ultralytics.utils.metrics import mask_iou
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -61,6 +62,7 @@ def calculate_iou(pred_mask, true_mask, smooth=1e-10):
     union = np.logical_or(pred_mask, true_mask).sum()
     return (intersection + smooth) / (union + smooth)
 
+# mask_iou()
 
 def multi_class_metrics(pred_mask, true_mask):
     iou_scores = []
@@ -72,11 +74,11 @@ def multi_class_metrics(pred_mask, true_mask):
         true_bin = (true_mask[c] > 0.5).astype(int)  # 二值化真实 → 0/1
         if np.sum(pred_bin) == 0 and np.sum(true_bin) == 0:
             continue
-        iou = calculate_iou(pred_bin, true_bin)
+        # iou = calculate_iou(pred_bin, true_bin)
+        iou = mask_iou(torch.from_numpy(pred_bin).reshape(1,-1), torch.from_numpy(true_bin).reshape(1,-1))
         dice = calculate_dice(pred_bin, true_bin)
-        if 0 < iou < 1:
+        if 0 < iou <= 1:
             iou_scores.append(iou)
-        if 0 < iou < 1:
             dice_scores.append(dice)
     return {'dice': np.mean(dice_scores), 'iou': np.mean(iou_scores)}
 
@@ -123,6 +125,7 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, required=True, choices=['yolo', 'rtdetr', 'yoloe', 'yoloworld'], help='Model type to test: yolo, rtdetr, or yoloe')
     parser.add_argument('--ckpt', type=str)
     parser.add_argument('--data', type=str)
+    parser.add_argument('--batch', type=int, default=8)
     parser.add_argument('--phase', type=str)
     parser.add_argument('--name', type=str)
     args = parser.parse_args()
@@ -138,7 +141,7 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Unsupported model type: {args.model}")
 
-    metrics = model.val(data=args.data, split=args.phase, name=args.name)
+    metrics = model.val(data=args.data, split=args.phase, name=args.name, batch=args.batch)
     result = metrics.results_dict
 
     data = check_det_dataset(args.data)

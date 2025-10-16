@@ -288,19 +288,6 @@ if __name__ == "__main__":
         for slide in slide_list:
             shutil.copy(os.path.join(args.wsi_dir, slide), tmp_dir)
         args.wsi_dir = tmp_dir
-    # all_results = {}
-    # st = time.time()
-    # run_wsi_task(args)
-    # print(time.time() - st)
-    # st = time.time()
-    # run_yolo(args)
-    # print(time.time() - st)
-    # st = time.time()
-    # args.test_csv = gen_test_csv(args)
-    # run_cls(args)
-    # print(time.time() - st)
-    # run_isup(args)
-    # run_gleason(args)
 
     all_results = {}
     st = time.time()
@@ -352,14 +339,16 @@ if __name__ == "__main__":
 
         for slide_id, pred in zip(cancer_df['slide_id'], cancer_df['prediction']):
             if pred == 1:
-                tissue = tissue_df[tissue_df['slide_id'] == slide_id]
-                gleason = gleason_df[gleason_df['slide_id'] == slide_id]
-                isup = isup_df[isup_df['slide_id'] == slide_id]
-
+                tissue = tissue_df[tissue_df['slide_id'].astype(str) == str(slide_id)]
+                gleason = gleason_df[gleason_df['slide_id'].astype(str) == str(slide_id)]
+                isup = isup_df[isup_df['slide_id'].astype(str) == str(slide_id)]
+                tissue = tissue['area'].iloc[0] if not tissue.empty else "N/A"
+                gleason = grade_mapping[gleason['prediction'].iloc[0]] if not gleason.empty else 'N/A'
+                isup = grade_mapping[isup['prediction'].iloc[0]] if not isup.empty else 'N/A'
                 result = {
                     "filename": f'{slide_id}.geojson',
-                    "percentage": tissue['area'].iloc[0] if not tissue.empty else "N/A",
-                    "Gleason": f"{gleason['prediction'].iloc[0] if not gleason.empty else 'N/A'};ISUP: {isup['prediction'].iloc[0] if not isup.empty else 'N/A'}"
+                    "percentage": tissue,
+                    "Gleason": f"{gleason};ISUP: {isup}"
                 }
                 results.append(result)
 

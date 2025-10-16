@@ -349,8 +349,9 @@ if __name__ == '__main__':
         # print(f'malignant tissue area: {converter.malignant_area}; all tissue area: {converter.tissue_area}  Proportion of malignant tissue: {converter.malignant_area / converter.tissue_area * 100:.4f} %')
 
         print('time per slide: {:.1f}'.format(time.time() - one_slide_start))
-    area_df = pd.DataFrame(area_data)
-    area_path = os.path.join(args.output_dir, 'area.csv')
-    area_df.to_csv(area_path, index=False)
+    if area_data:
+        area_df = pd.DataFrame(area_data)
+        area_path = os.path.join(args.output_dir, 'area.csv')
+        area_df.to_csv(area_path, index=False)
     print('Time used for this dataset:{:.1f}'.format(time.time() - process_start_time))
     print('Inference ends', end='')

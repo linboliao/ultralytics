@@ -6,7 +6,7 @@ export MKL_THREADING_LAYER=GNU
 export MKL_SERVICE_FORCE_INTEL=1
 
 model=yolo # yolo yoloe rtdetr yoloworld
-ckpt=runs/segment/yolo12l/weights/best.pt
+ckpt=runs/segment/yolo12l/weights/last.pt
 data=tasks/cfg/datasets/segment.yaml
 epoches=500
 patience=100
