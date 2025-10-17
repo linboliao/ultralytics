@@ -1,10 +1,9 @@
 import argparse
 
-from ultralytics import YOLO, YOLOE, RTDETR, YOLOWorld
-from ultralytics.models.yolo.yoloe import YOLOEPESegTrainer
+from ultralytics import YOLO, RTDETR, YOLOWorld
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', type=str, required=True, choices=['yolo', 'rtdetr', 'yoloe', 'yoloworld'], help='Model type to train: yolo, rtdetr, or yoloe')
+parser.add_argument('--model', type=str, required=True, choices=['yolo', 'rtdetr', 'yoloworld'], help='Model type to train: yolo, rtdetr')
 parser.add_argument('--ckpt', type=str, required=True, help='Path to model checkpoint file')
 parser.add_argument('--data', type=str, required=True, help='Path to data configuration file')
 parser.add_argument('--epoches', type=int, help='Number of training epochs')
@@ -21,9 +20,6 @@ if args.model == 'yolo':
     model = YOLO(args.ckpt)
 elif args.model == 'rtdetr':
     model = RTDETR(args.ckpt)
-elif args.model == 'yoloe':
-    trainer = YOLOEPESegTrainer
-    model = YOLOE(args.ckpt)
 elif args.model == 'yoloworld':
     model = YOLOWorld(args.ckpt)
 else:
