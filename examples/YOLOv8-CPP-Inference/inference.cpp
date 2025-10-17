@@ -1,5 +1,3 @@
-// Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-
 #include "inference.h"
 
 Inference::Inference(const std::string &onnxModelPath, const cv::Size &modelInputShape, const std::string &classesTxtFile, const bool &runWithCuda)
@@ -16,10 +14,8 @@ Inference::Inference(const std::string &onnxModelPath, const cv::Size &modelInpu
 std::vector<Detection> Inference::runInference(const cv::Mat &input)
 {
     cv::Mat modelInput = input;
-    int pad_x, pad_y;
-    float scale;
     if (letterBoxForSquare && modelShape.width == modelShape.height)
-        modelInput = formatToSquare(modelInput, &pad_x, &pad_y, &scale);
+        modelInput = formatToSquare(modelInput);
 
     cv::Mat blob;
     cv::dnn::blobFromImage(modelInput, blob, 1.0/255.0, modelShape, cv::Scalar(), true, false);
@@ -44,6 +40,9 @@ std::vector<Detection> Inference::runInference(const cv::Mat &input)
         cv::transpose(outputs[0], outputs[0]);
     }
     float *data = (float *)outputs[0].data;
+
+    float x_factor = modelInput.cols / modelShape.width;
+    float y_factor = modelInput.rows / modelShape.height;
 
     std::vector<int> class_ids;
     std::vector<float> confidences;
@@ -71,11 +70,11 @@ std::vector<Detection> Inference::runInference(const cv::Mat &input)
                 float w = data[2];
                 float h = data[3];
 
-                int left = int((x - 0.5 * w - pad_x) / scale);
-                int top = int((y - 0.5 * h - pad_y) / scale);
+                int left = int((x - 0.5 * w) * x_factor);
+                int top = int((y - 0.5 * h) * y_factor);
 
-                int width = int(w / scale);
-                int height = int(h / scale);
+                int width = int(w * x_factor);
+                int height = int(h * y_factor);
 
                 boxes.push_back(cv::Rect(left, top, width, height));
             }
@@ -104,11 +103,11 @@ std::vector<Detection> Inference::runInference(const cv::Mat &input)
                     float w = data[2];
                     float h = data[3];
 
-                    int left = int((x - 0.5 * w - pad_x) / scale);
-                    int top = int((y - 0.5 * h - pad_y) / scale);
+                    int left = int((x - 0.5 * w) * x_factor);
+                    int top = int((y - 0.5 * h) * y_factor);
 
-                    int width = int(w / scale);
-                    int height = int(h / scale);
+                    int width = int(w * x_factor);
+                    int height = int(h * y_factor);
 
                     boxes.push_back(cv::Rect(left, top, width, height));
                 }
@@ -175,23 +174,12 @@ void Inference::loadOnnxNetwork()
     }
 }
 
-cv::Mat Inference::formatToSquare(const cv::Mat &source, int *pad_x, int *pad_y, float *scale)
+cv::Mat Inference::formatToSquare(const cv::Mat &source)
 {
     int col = source.cols;
     int row = source.rows;
-    int m_inputWidth = modelShape.width;
-    int m_inputHeight = modelShape.height;
-
-    *scale = std::min(m_inputWidth / (float)col, m_inputHeight / (float)row);
-    int resized_w = col * *scale;
-    int resized_h = row * *scale;
-    *pad_x = (m_inputWidth - resized_w) / 2;
-    *pad_y = (m_inputHeight - resized_h) / 2;
-
-    cv::Mat resized;
-    cv::resize(source, resized, cv::Size(resized_w, resized_h));
-    cv::Mat result = cv::Mat::zeros(m_inputHeight, m_inputWidth, source.type());
-    resized.copyTo(result(cv::Rect(*pad_x, *pad_y, resized_w, resized_h)));
-    resized.release();
+    int _max = MAX(col, row);
+    cv::Mat result = cv::Mat::zeros(_max, _max, CV_8UC3);
+    source.copyTo(result(cv::Rect(0, 0, col, row)));
     return result;
 }

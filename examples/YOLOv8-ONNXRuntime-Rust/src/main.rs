@@ -1,5 +1,3 @@
-// Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-
 use clap::Parser;
 
 use yolov8_rs::{Args, YOLOv8};

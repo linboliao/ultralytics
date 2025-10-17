@@ -14,14 +14,6 @@ from ultralytics.utils import DATASETS_DIR, SETTINGS
 from ultralytics.utils.checks import check_requirements
 
 
-@pytest.mark.slow
-def test_tensorboard():
-    """Test training with TensorBoard logging enabled."""
-    SETTINGS["tensorboard"] = True
-    YOLO("yolo11n-cls.yaml").train(data="imagenet10", imgsz=32, epochs=3, plots=False, device="cpu")
-    SETTINGS["tensorboard"] = False
-
-
 @pytest.mark.skipif(not check_requirements("ray", install=False), reason="ray[tune] not installed")
 def test_model_ray_tune():
     """Tune YOLO model using Ray for hyperparameter optimization."""
@@ -32,7 +24,7 @@ def test_model_ray_tune():
 
 @pytest.mark.skipif(not check_requirements("mlflow", install=False), reason="mlflow not installed")
 def test_mlflow():
-    """Test training with MLflow tracking enabled."""
+    """Test training with MLflow tracking enabled (see https://mlflow.org/ for details)."""
     SETTINGS["mlflow"] = True
     YOLO("yolo11n-cls.yaml").train(data="imagenet10", imgsz=32, epochs=3, plots=False, device="cpu")
     SETTINGS["mlflow"] = False
@@ -72,7 +64,11 @@ def test_mlflow_keep_run_active():
 
 @pytest.mark.skipif(not check_requirements("tritonclient", install=False), reason="tritonclient[all] not installed")
 def test_triton():
-    """Test NVIDIA Triton Server functionalities with YOLO model."""
+    """
+    Test NVIDIA Triton Server functionalities with YOLO model.
+
+    See https://catalog.ngc.nvidia.com/orgs/nvidia/containers/tritonserver.
+    """
     check_requirements("tritonclient[all]")
     from tritonclient.http import InferenceServerClient  # noqa
 
@@ -122,9 +118,9 @@ def test_triton():
     subprocess.call(f"docker kill {container_id}", shell=True)
 
 
-@pytest.mark.skipif(not check_requirements("faster-coco-eval", install=False), reason="faster-coco-eval not installed")
-def test_faster_coco_eval():
-    """Validate YOLO model predictions on COCO dataset using faster-coco-eval."""
+@pytest.mark.skipif(not check_requirements("pycocotools", install=False), reason="pycocotools not installed")
+def test_pycocotools():
+    """Validate YOLO model predictions on COCO dataset using pycocotools."""
     from ultralytics.models.yolo.detect import DetectionValidator
     from ultralytics.models.yolo.pose import PoseValidator
     from ultralytics.models.yolo.segment import SegmentationValidator

@@ -39,7 +39,7 @@ except (ImportError, AssertionError):
     mlflow = None
 
 
-def sanitize_dict(x: dict) -> dict:
+def sanitize_dict(x):
     """Sanitize dictionary keys by removing parentheses and converting values to floats."""
     return {k.replace("(", "").replace(")", ""): float(v) for k, v in x.items()}
 
@@ -55,11 +55,14 @@ def on_pretrain_routine_end(trainer):
     Args:
         trainer (ultralytics.engine.trainer.BaseTrainer): The training object with arguments and parameters to log.
 
+    Global:
+        mlflow: The imported mlflow module to use for logging.
+
     Environment Variables:
         MLFLOW_TRACKING_URI: The URI for MLflow tracking. If not set, defaults to 'runs/mlflow'.
         MLFLOW_EXPERIMENT_NAME: The name of the MLflow experiment. If not set, defaults to trainer.args.project.
         MLFLOW_RUN: The name of the MLflow run. If not set, defaults to trainer.args.name.
-        MLFLOW_KEEP_RUN_ACTIVE: Boolean indicating whether to keep the MLflow run active after training ends.
+        MLFLOW_KEEP_RUN_ACTIVE: Boolean indicating whether to keep the MLflow run active after the end of training.
     """
     global mlflow
 
@@ -81,8 +84,7 @@ def on_pretrain_routine_end(trainer):
         LOGGER.info(f"{PREFIX}disable with 'yolo settings mlflow=False'")
         mlflow.log_params(dict(trainer.args))
     except Exception as e:
-        LOGGER.warning(f"{PREFIX}Failed to initialize: {e}")
-        LOGGER.warning(f"{PREFIX}Not tracking this run")
+        LOGGER.warning(f"{PREFIX}WARNING ⚠️ Failed to initialize: {e}\n{PREFIX}WARNING ⚠️ Not tracking this run")
 
 
 def on_train_epoch_end(trainer):
@@ -104,7 +106,7 @@ def on_fit_epoch_end(trainer):
 
 
 def on_train_end(trainer):
-    """Log model artifacts at the end of training."""
+    """Log model artifacts at the end of the training."""
     if not mlflow:
         return
     mlflow.log_artifact(str(trainer.best.parent))  # log save_dir/weights directory with best.pt and last.pt

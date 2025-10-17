@@ -1,5 +1,3 @@
-// Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-
 #include <iostream>
 #include <vector>
 #include <getopt.h>

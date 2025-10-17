@@ -1,20 +1,20 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """
-Ultralytics neural network modules.
+Ultralytics modules.
 
-This module provides access to various neural network components used in Ultralytics models, including convolution
-blocks, attention mechanisms, transformer components, and detection/segmentation heads.
+Example:
+    Visualize a module with Netron.
+    ```python
+    from ultralytics.nn.modules import *
+    import torch
+    import os
 
-Examples:
-    Visualize a module with Netron
-    >>> from ultralytics.nn.modules import Conv
-    >>> import torch
-    >>> import subprocess
-    >>> x = torch.ones(1, 128, 40, 40)
-    >>> m = Conv(128, 128)
-    >>> f = f"{m._get_name()}.onnx"
-    >>> torch.onnx.export(m, x, f)
-    >>> subprocess.run(f"onnxslim {f} {f} && open {f}", shell=True, check=True)  # pip install onnxslim
+    x = torch.ones(1, 128, 40, 40)
+    m = Conv(128, 128)
+    f = f"{m._get_name()}.onnx"
+    torch.onnx.export(m, x, f)
+    os.system(f"onnxslim {f} {f} && open {f}")  # pip install onnxslim
+    ```
 """
 
 from .block import (
@@ -30,7 +30,6 @@ from .block import (
     SPP,
     SPPELAN,
     SPPF,
-    A2C2f,
     AConv,
     ADown,
     Attention,
@@ -51,7 +50,6 @@ from .block import (
     HGBlock,
     HGStem,
     ImagePoolingAttn,
-    MaxSigmoidAttnBlock,
     Proto,
     RepC3,
     RepNCSPELAN4,
@@ -59,6 +57,11 @@ from .block import (
     ResNetLayer,
     SCDown,
     TorchVision,
+    A2C2f,
+    HyperACE,
+    DownsampleConv,
+    FullPAD_Tunnel,
+    DSC3k2
 )
 from .conv import (
     CBAM,
@@ -66,6 +69,7 @@ from .conv import (
     Concat,
     Conv,
     Conv2,
+    DSConv,
     ConvTranspose,
     DWConv,
     DWConvTranspose2d,
@@ -76,19 +80,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
-from .head import (
-    OBB,
-    Classify,
-    Detect,
-    LRPCHead,
-    Pose,
-    RTDETRDecoder,
-    Segment,
-    WorldDetect,
-    YOLOEDetect,
-    YOLOESegment,
-    v10Detect,
-)
+from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (
     AIFI,
     MLP,
@@ -101,7 +93,6 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
-from .PKI import C2f_PKIBlock, C3k2PKI
 
 __all__ = (
     "Conv",
@@ -157,12 +148,8 @@ __all__ = (
     "ResNetLayer",
     "OBB",
     "WorldDetect",
-    "YOLOEDetect",
-    "YOLOESegment",
     "v10Detect",
-    "LRPCHead",
     "ImagePoolingAttn",
-    "MaxSigmoidAttnBlock",
     "ContrastiveHead",
     "BNContrastiveHead",
     "RepNCSPELAN4",
@@ -180,6 +167,9 @@ __all__ = (
     "TorchVision",
     "Index",
     "A2C2f",
-    "C2f_PKIBlock",
-    "C3k2PKI",
+    "HyperACE",
+    "DownsampleConv",
+    "FullPAD_Tunnel",
+    "DSC3k2",
+    "DSConv"
 )

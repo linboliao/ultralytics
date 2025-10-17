@@ -1,5 +1,4 @@
 #![allow(clippy::type_complexity)]
-// Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
 use std::io::{Read, Write};
 
