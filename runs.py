@@ -61,32 +61,64 @@ def run_command(p, command, task_name):
         return False
 
 
-def generate_csv_files(csv_dir, coord_dir, wsi_dir):
-    """生成CSV分割文件（含两列：case_id 和 slide_id）"""
+def generate_csv_files(csv_dir, coord_dir, wsi_dir, num):
+    """生成CSV分割文件（含两列：case_id 和 slide_id），均匀分成num份"""
     csv_path = os.path.join(csv_dir, 'csv')
     os.makedirs(csv_path, exist_ok=True)
 
-    base_names = []
-    for slide in os.listdir(wsi_dir):
-        base_name = os.path.splitext(slide)[0]
-        coord_path = os.path.join(coord_dir, 'patches', f'{base_name}.h5')
-        if os.path.exists(coord_path):
-            base_names.append(base_name)
+    # 获取存在的base_names
+    base_names = [
+        os.path.splitext(slide)[0] for slide in os.listdir(wsi_dir)
+        if os.path.exists(os.path.join(coord_dir, 'patches', f'{os.path.splitext(slide)[0]}.h5'))
+    ]
 
-    df = pd.DataFrame({
-        "case_id": base_names,
-        "slide_id": base_names
-    })
-    csv_path = f"{csv_path}/part.csv"
-    df.to_csv(csv_path, index=False, encoding='utf-8', errors='replace')
+    df = pd.DataFrame({"case_id": base_names, "slide_id": base_names})
+    total_rows = len(df)
 
-    return csv_path
+    part_size = total_rows // num
+    remainder = total_rows % num
+
+    csv_files = []
+    start_index = 0
+
+    for i in range(num):
+        current_part_size = part_size + (1 if i < remainder else 0)
+        end_index = start_index + current_part_size
+
+        part_df = df.iloc[start_index:end_index]
+        part_csv_path = os.path.join(csv_path, f'part_{i}.csv')
+        part_df.to_csv(part_csv_path, index=False)
+
+        csv_files.append(part_csv_path)
+        start_index = end_index
+
+    return csv_files
+
+
+def extract_features(csv_path, path, args, conda_path, coord_dir):
+    """处理单个CSV文件的函数，用于并行执行"""
+    feat_dir = os.path.join(args.output_dir, 'feat_1_224')
+    task_name = f"WSI特征提取_{os.path.basename(csv_path)}"
+
+    feat_cmd = [
+        f"{conda_path}/clam/bin/python",
+        os.path.join(path, 'extract_features_fp_fast.py'),
+        "--data_coors_dir", coord_dir,
+        "--data_slide_dir", args.wsi_dir,
+        "--slide_ext", '.svs;.kfb',
+        "--csv_path", csv_path,
+        "--feat_dir", feat_dir,
+        "--batch_size", '32',
+        "--model", args.model,
+    ]
+
+    return run_command(path, feat_cmd, task_name)
 
 
 def run_wsi_task(args):
     """WSI处理流水线（补丁生成+特征提取）"""
     path = work_dir.get('prepath')
-    coord_dir = os.path.join(args.output_dir, 'patches_0_224')
+    coord_dir = os.path.join(args.output_dir, 'patches_1_224')
     patch_cmd = [
         f"{conda_path}/clam/bin/python",
         os.path.join(path, 'create_patches_fp.py'),
@@ -102,20 +134,22 @@ def run_wsi_task(args):
     if not run_command(path, patch_cmd, "WSI生成coords"):
         return False
 
-    tmp_csv = generate_csv_files(args.output_dir, coord_dir, args.wsi_dir)
-    feat_dir = os.path.join(args.output_dir, 'feat_0_224')
-    feat_cmd = [
-        f"{conda_path}/clam/bin/python",
-        os.path.join(path, 'extract_features_fp_fast.py'),
-        "--data_coors_dir", coord_dir,
-        "--data_slide_dir", args.wsi_dir,
-        "--slide_ext", '.svs;.kfb',
-        "--csv_path", tmp_csv,
-        "--feat_dir", feat_dir,
-        "--batch_size", '128',
-        "--model", args.model,
-    ]
-    return run_command(path, feat_cmd, "WSI特征提取")
+    csv_paths = generate_csv_files(args.output_dir, coord_dir, args.wsi_dir, 2)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=2) as executor:
+        future_to_csv = {
+            executor.submit(extract_features, csv_path, path, args, conda_path, coord_dir): csv_path
+            for csv_path in csv_paths
+        }
+
+        results = []
+        for future in concurrent.futures.as_completed(future_to_csv):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                print(f"任务处理异常: {e}")
+                return False
+    return True
 
 
 def run_yolo(args):
@@ -155,7 +189,7 @@ def run_yolo(args):
 
 def gen_test_csv(args):
     test_csv = os.path.join(args.output_dir, 'test.csv')
-    feat_dir = os.path.join(args.output_dir, f'feat_0_224/pt_files/{args.model}')
+    feat_dir = os.path.join(args.output_dir, f'feat_1_224/pt_files/{args.model}')
     feat_files = [entry.path for entry in os.scandir(feat_dir)]
     # feat_files = [os.path.join(feat_dir, f) for f in os.listdir(feat_dir)]
     df = pd.DataFrame({
@@ -244,7 +278,7 @@ def execute_phase_parallel(tasks, task_names, max_workers=2):
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         # 提交所有任务到执行器
-        future_to_task = {executor.submit(task,args): name for task, name in zip(tasks, task_names)}
+        future_to_task = {executor.submit(task, args): name for task, name in zip(tasks, task_names)}
 
         results = {}
         # 等待所有任务完成并收集结果
@@ -265,9 +299,9 @@ parser = argparse.ArgumentParser(description="医学图像处理流水线 v1.0")
 
 # 路径参数组
 path_group = parser.add_argument_group("路径配置")
-path_group.add_argument("--wsi_dir", type=str, required=True, help="WSI图像目录")
+path_group.add_argument("--wsi_dir", type=str, help="WSI图像目录", default='/NAS2/Data1/lbliao/Data/MXB/segment/第一批/slides')
 path_group.add_argument("--slide_list", type=str, help="slide 列表，使用;分隔")
-path_group.add_argument("--output_dir", required=True, help="合并结果输出目录")
+path_group.add_argument("--output_dir", help="合并结果输出目录", default='/NAS2/Data1/lbliao/Data/MXB/segment/第一批/result')
 
 # WSI参数组
 wsi_group = parser.add_argument_group("WSI处理参数")
@@ -362,5 +396,3 @@ if __name__ == "__main__":
 
         with open(result_json, 'w') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-
-
