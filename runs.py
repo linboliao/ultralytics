@@ -533,19 +533,24 @@ if __name__ == "__main__":
         isup_df = pd.read_csv(isup_csv)
 
         for slide_id, pred in zip(cancer_df['slide_id'], cancer_df['prediction']):
-            if pred == 1:
-                tissue = tissue_df[tissue_df['slide_id'].astype(str) == str(slide_id)]
-                gleason = gleason_df[gleason_df['slide_id'].astype(str) == str(slide_id)]
-                isup = isup_df[isup_df['slide_id'].astype(str) == str(slide_id)]
-                tissue = tissue['area'].iloc[0] if not tissue.empty else "N/A"
-                gleason = grade_mapping[gleason['prediction'].iloc[0]] if not gleason.empty else 'N/A'
-                isup = grade_mapping[isup['prediction'].iloc[0]] if not isup.empty else 'N/A'
-                result = {
-                    "filename": f'{slide_id}.geojson',
-                    "percentage": tissue,
-                    "Gleason": f"{gleason};ISUP: {isup}"
-                }
-                results.append(result)
+            if pred == 0:
+                typ = 'Benign'
+            else:
+                typ = 'Malignant'
+
+            tissue = tissue_df[tissue_df['slide_id'].astype(str) == str(slide_id)]
+            gleason = gleason_df[gleason_df['slide_id'].astype(str) == str(slide_id)]
+            isup = isup_df[isup_df['slide_id'].astype(str) == str(slide_id)]
+            tissue = tissue['area'].iloc[0] if not tissue.empty else "N/A"
+            gleason = grade_mapping[gleason['prediction'].iloc[0]] if not gleason.empty else 'N/A'
+            isup = grade_mapping[isup['prediction'].iloc[0]] if not isup.empty else 'N/A'
+            result = {
+                "filename": f'{slide_id}.geojson',
+                "percentage": tissue,
+                "Gleason": f"{gleason}",
+                "ISUP": f"{isup}"
+            }
+            results.append(result)
 
         try:
             with open(result_json, 'r') as f:
