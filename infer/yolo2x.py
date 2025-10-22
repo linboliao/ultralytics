@@ -253,22 +253,33 @@ class YOLO2GeoJsonSegment(YOLO2X):
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(geojson_dict, f, indent=2, ensure_ascii=False)
 
-
 def find_all_wsi_paths(wsi_root, extentions):
     """
     find the full wsi path under data_root, return a dict {slide_id: full_path}
     """
+    # to support more than one ext, e.g., support .svs and .mrxs
+    exts = extentions.split(';')
     result = {}
-    all_paths = glob.glob(os.path.join(wsi_root, '**'), recursive=True)
-    for ext in extentions.split(';'):
-        print(f'Process format:{ext}')
-        paths = [i for i in all_paths if os.path.splitext(i)[1].lower() == ext.lower()]
-        for h in paths:
-            slide_name = os.path.split(h)[1]
-            slide_id = os.path.splitext(slide_name)[0]
-            result[slide_id] = h
-    print("found {} wsi".format(len(result)))
+    for file in os.listdir(wsi_root):
+        base, ext = os.path.splitext(file)
+        if ext.lower() in exts:
+            result[base] = os.path.join(wsi_root, file)
     return result
+# def find_all_wsi_paths(wsi_root, extentions):
+#     """
+#     find the full wsi path under data_root, return a dict {slide_id: full_path}
+#     """
+#     result = {}
+#     all_paths = glob.glob(os.path.join(wsi_root, '**'), recursive=True)
+#     for ext in extentions.split(';'):
+#         print(f'Process format:{ext}')
+#         paths = [i for i in all_paths if os.path.splitext(i)[1].lower() == ext.lower()]
+#         for h in paths:
+#             slide_name = os.path.split(h)[1]
+#             slide_id = os.path.splitext(slide_name)[0]
+#             result[slide_id] = h
+#     print("found {} wsi".format(len(result)))
+#     return result
 
 
 parser = argparse.ArgumentParser(description='YOLO to X')

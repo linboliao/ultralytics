@@ -7,7 +7,7 @@ import time
 import traceback
 import concurrent.futures
 import pandas as pd
-from joblib import Parallel, delayed
+from typing import Dict, List, Any, Optional
 
 # conda_path = 'C:/Users/MXZY-AI/.conda/envs'
 #
@@ -272,7 +272,7 @@ isup_mapping = {
 }
 
 
-def execute_phase_parallel(tasks, task_names, max_workers=2):
+def execute_phase_parallel(tasks, task_names, args, max_workers=2):
     """并行执行阶段任务"""
     print(f"🚀 开始并行执行 {len(tasks)} 个任务: {', '.join(task_names)}")
 
@@ -295,6 +295,171 @@ def execute_phase_parallel(tasks, task_names, max_workers=2):
     return results
 
 
+def run_medical_image_pipeline(
+        # 路径配置参数
+        wsi_dir: str,
+        output_dir: str,
+        slide_list= None,
+
+        patch_level: int = 0,
+        wsi_format: str = "svs;kfb",
+        model: str = "h-optimus-1",
+) -> Dict[str, Any]:
+    """
+    执行医学图像处理流水线
+
+    Args:
+        wsi_dir: WSI图像目录，默认为第一批数据路径
+        slide_list: slide列表，使用分号分隔的字符串
+        output_dir: 合并结果输出目录
+        patch_level: 提取层级，默认为0
+        wsi_format: slide格式，默认为'svs;kfb'
+        model: 基础模型，默认为'h-optimus-1'
+
+    Returns:
+        包含执行结果和统计信息的字典
+    """
+    args = argparse.Namespace()
+    args.wsi_dir = wsi_dir
+    args.slide_list = slide_list
+    args.output_dir = output_dir
+    args.patch_level = patch_level
+    args.wsi_format = wsi_format
+    args.model = model
+
+    if slide_list:
+        slide_list_items = slide_list.split(';')
+        tmp_dir = os.path.join(output_dir, 'tmp')
+        os.makedirs(tmp_dir, exist_ok=True)
+        for slide in slide_list_items:
+            shutil.copy(os.path.join(wsi_dir, slide), tmp_dir)
+        args.wsi_dir = tmp_dir
+
+    all_results = {}
+    execution_stats = {}
+    st = time.time()
+
+    try:
+        # 阶段1：并行执行 run_wsi_task 和 run_yolo
+        phase1_tasks = [run_wsi_task, run_yolo]
+        phase1_names = ["特征提取", "YOLO检测"]
+
+        phase1_results = execute_phase_parallel(
+            phase1_tasks, phase1_names, args, max_workers=2,
+        )
+        all_results.update(phase1_results)
+
+        phase1_time = time.time() - st
+        execution_stats["phase1_time"] = phase1_time
+        print(f"⏱️ 阶段1执行时间: {phase1_time:.2f}秒")
+
+        # 生成测试CSV
+        st_csv = time.time()
+        args.test_csv = gen_test_csv(args)
+        csv_gen_time = time.time() - st_csv
+        execution_stats["csv_gen_time"] = csv_gen_time
+        print(f"⏱️ CSV生成时间: {csv_gen_time:.2f}秒")
+
+        # 阶段2：并行执行 run_cls, run_isup, run_gleason
+        st_phase2 = time.time()
+        phase2_tasks = [run_cls, run_isup, run_gleason]
+        phase2_names = ["癌症诊断", "ISUP诊断", "Gleason诊断"]
+
+        phase2_results = execute_phase_parallel(
+            phase2_tasks, phase2_names, args, max_workers=3,
+        )
+        all_results.update(phase2_results)
+
+        phase2_time = time.time() - st_phase2
+        execution_stats["phase2_time"] = phase2_time
+        print(f"⏱️ 阶段2执行时间: {phase2_time:.2f}秒")
+
+        # 总执行时间
+        total_time = phase1_time + csv_gen_time + phase2_time
+        execution_stats["total_time"] = total_time
+        print(f"⏱️ 总执行时间: {total_time:.2f}秒")
+
+        # 生成结果文件
+        if all_results.get("癌症诊断", True):
+            _generate_result_files(output_dir)
+
+        return {
+            "success": True,
+            "results": all_results,
+            "statistics": execution_stats,
+            "output_dir": output_dir
+        }
+
+    except Exception as e:
+        print(f"❌ 流水线执行失败: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "statistics": execution_stats
+        }
+
+
+def _generate_result_files(output_dir: str) -> None:
+    """生成最终的结果文件"""
+    result_json = os.path.join(output_dir, 'exist_cancer.json')
+    cancer_csv = os.path.join(output_dir, 'cancer/Infer_Result_AB_MIL.csv')
+    tissue_csv = os.path.join(output_dir, 'yolo/area.csv')
+    gleason_csv = os.path.join(output_dir, 'gleason/Infer_Result_CLAM_MB_MIL.csv')
+    isup_csv = os.path.join(output_dir, 'isup/Infer_Result_CLAM_MB_MIL.csv')
+
+    results = []
+
+    # 读取各阶段结果CSV文件
+    cancer_df = pd.read_csv(cancer_csv)
+    tissue_df = pd.read_csv(tissue_csv)
+    gleason_df = pd.read_csv(gleason_csv)
+    isup_df = pd.read_csv(isup_csv)
+
+    # 处理每个slide的结果
+    for slide_id, pred in zip(cancer_df['slide_id'], cancer_df['prediction']):
+        if pred == 1:
+            tissue = tissue_df[tissue_df['slide_id'].astype(str) == str(slide_id)]
+            gleason = gleason_df[gleason_df['slide_id'].astype(str) == str(slide_id)]
+            # isup = isup_df[isup_df['slide_id'].astype(str) == str(slide_id)]
+
+            tissue_area = tissue['area'].iloc[0] if not tissue.empty else "N/A"
+            gleason_grade = grade_mapping[gleason['prediction'].iloc[0]] if not gleason.empty else 'N/A'
+            # isup_grade = isup_mapping[isup['prediction'].iloc[0]] if not isup.empty else 'N/A'
+            isup_grade = isup_mapping[gleason_grade] if gleason_grade != 'N/A' else "N/A"
+
+            result = {
+                "filename": f'{slide_id}.geojson',
+                "percentage": tissue_area,
+                "Gleason": f"{gleason_grade};ISUP: {isup_grade}"
+            }
+            results.append(result)
+    import geopandas as gpd
+    for file in os.listdir(os.path.join(output_dir, 'yolo')):
+        if file.endswith(".geojson"):
+            file_path = os.path.join(output_dir, 'yolo', file)
+
+            gdf = gpd.read_file(file_path)
+            gdf = gdf[
+                gdf['classification'].apply(
+                    lambda x: json.loads(x.replace("'", '"')).get('name') == 'cancer'
+                )
+            ]
+            gdf.to_file(os.path.join(output_dir, file.replace('-segment', '')))
+
+    try:
+        with open(result_json, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {"geojson_files": []}
+
+    # 添加新结果
+    data['geojson_files'].extend(results)
+
+    # 写入结果文件
+    with open(result_json, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
 parser = argparse.ArgumentParser(description="医学图像处理流水线 v1.0")
 
 # 路径参数组
@@ -308,10 +473,6 @@ wsi_group = parser.add_argument_group("WSI处理参数")
 wsi_group.add_argument("--patch_level", type=int, default=0, help="提取层级")
 wsi_group.add_argument("--wsi_format", default="svs;kfb", help="slide 格式，使用;分隔")
 wsi_group.add_argument("--model", default="h-optimus-1", help="基础模型")
-
-# 任务控制组
-control_group = parser.add_argument_group("任务控制")
-control_group.add_argument("-j", "--jobs", type=int, default=-1, help="并行任务数（-1=自动使用所有核心）")
 
 if __name__ == "__main__":
     args = parser.parse_args()
@@ -330,7 +491,7 @@ if __name__ == "__main__":
     phase1_tasks = [run_wsi_task, run_yolo]
     phase1_names = ["特征提取", "YOLO检测"]
 
-    phase1_results = execute_phase_parallel(phase1_tasks, phase1_names, max_workers=2)
+    phase1_results = execute_phase_parallel(phase1_tasks, phase1_names, args, max_workers=2)
     all_results.update(phase1_results)
 
     phase1_time = time.time() - st
@@ -347,7 +508,7 @@ if __name__ == "__main__":
     phase2_tasks = [run_cls, run_isup, run_gleason]
     phase2_names = ["癌症诊断", "ISUP诊断", "Gleason诊断"]
 
-    phase2_results = execute_phase_parallel(phase2_tasks, phase2_names, max_workers=3)
+    phase2_results = execute_phase_parallel(phase2_tasks, phase2_names,args, max_workers=3)
     all_results.update(phase2_results)
 
     phase2_time = time.time() - st
