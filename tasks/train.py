@@ -29,4 +29,4 @@ elif args.model == 'yoloworld':
 else:
     raise ValueError(f"Unsupported model type: {args.model}")
 
-results = model.train(data=args.data, epochs=args.epoches, imgsz=args.image_size, device=args.gpu_ids, batch=args.batch, patience=args.patience, lr0=args.lr0, trainer=trainer, name=args.name, resume=args.resume)
+results = model.train(data=args.data, epochs=args.epoches, imgsz=args.image_size, device=args.gpu_ids, batch=args.batch, patience=args.patience, lr0=args.lr0, trainer=trainer, name=args.name, project=args.project, resume=args.resume)
