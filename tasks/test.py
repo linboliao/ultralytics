@@ -128,6 +128,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch', type=int, default=8)
     parser.add_argument('--phase', type=str)
     parser.add_argument('--name', type=str)
+    parser.add_argument('--project', type=str)
     args = parser.parse_args()
 
     if args.model == 'yolo':
@@ -141,7 +142,7 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Unsupported model type: {args.model}")
 
-    metrics = model.val(data=args.data, split=args.phase, name=args.name, batch=args.batch)
+    metrics = model.val(data=args.data, split=args.phase, name=args.name, batch=args.batch, project=args.project,)
     result = metrics.results_dict
 
     data = check_det_dataset(args.data)
