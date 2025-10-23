@@ -410,10 +410,10 @@ def _generate_result_files(output_dir: str) -> None:
     results = []
 
     # 读取各阶段结果CSV文件
-    cancer_df = pd.read_csv(cancer_csv)
-    tissue_df = pd.read_csv(tissue_csv)
-    gleason_df = pd.read_csv(gleason_csv)
-    isup_df = pd.read_csv(isup_csv)
+    cancer_df = pd.read_csv(cancer_csv, dtype={'slide_id': str})
+    tissue_df = pd.read_csv(tissue_csv, dtype={'slide_id': str})
+    gleason_df = pd.read_csv(gleason_csv, dtype={'slide_id': str})
+    isup_df = pd.read_csv(isup_csv, dtype={'slide_id': str})
 
     # 处理每个slide的结果
     for slide_id, pred in zip(cancer_df['slide_id'], cancer_df['prediction']):
