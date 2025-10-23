@@ -253,6 +253,7 @@ class YOLO2GeoJsonSegment(YOLO2X):
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(geojson_dict, f, indent=2, ensure_ascii=False)
 
+
 def find_all_wsi_paths(wsi_root, extentions):
     """
     find the full wsi path under data_root, return a dict {slide_id: full_path}
@@ -265,21 +266,33 @@ def find_all_wsi_paths(wsi_root, extentions):
         if ext.lower() in exts:
             result[base] = os.path.join(wsi_root, file)
     return result
-# def find_all_wsi_paths(wsi_root, extentions):
-#     """
-#     find the full wsi path under data_root, return a dict {slide_id: full_path}
-#     """
-#     result = {}
-#     all_paths = glob.glob(os.path.join(wsi_root, '**'), recursive=True)
-#     for ext in extentions.split(';'):
-#         print(f'Process format:{ext}')
-#         paths = [i for i in all_paths if os.path.splitext(i)[1].lower() == ext.lower()]
-#         for h in paths:
-#             slide_name = os.path.split(h)[1]
-#             slide_id = os.path.splitext(slide_name)[0]
-#             result[slide_id] = h
-#     print("found {} wsi".format(len(result)))
-#     return result
+
+
+def save_area(area_data, csv_path, key_column='slide_id'):
+    """
+    如果new_data中的key_column值已存在于CSV文件中，则更新该行；否则追加新行。
+
+    Args:
+        area_data (list of dict): 新的数据行，每个字典代表一行。
+        csv_path (str): CSV文件的路径。
+        key_column (str): 用于判断是否重复的列名，默认为'slide_id'。
+    """
+    new_df = pd.DataFrame(area_data)
+
+    if os.path.exists(csv_path):
+        existing_df = pd.read_csv(csv_path)
+
+        mask = existing_df[key_column].isin(new_df[key_column])
+        existing_df_clean = existing_df[~mask]
+
+        updated_df = pd.concat([existing_df_clean, new_df], ignore_index=True)
+
+        updated_df.to_csv(csv_path, index=False)
+        print(f"成功更新CSV文件: {csv_path}。")
+
+    else:
+        new_df.to_csv(csv_path, index=False)
+        print(f"创建新的CSV文件并写入数据: {csv_path}")
 
 
 parser = argparse.ArgumentParser(description='YOLO to X')
@@ -361,8 +374,6 @@ if __name__ == '__main__':
 
         print('time per slide: {:.1f}'.format(time.time() - one_slide_start))
     if area_data:
-        area_df = pd.DataFrame(area_data)
-        area_path = os.path.join(args.output_dir, 'area.csv')
-        area_df.to_csv(area_path, index=False)
+        save_area(area_data, os.path.join(args.output_dir, 'area.csv'))
     print('Time used for this dataset:{:.1f}'.format(time.time() - process_start_time))
     print('Inference ends', end='')
