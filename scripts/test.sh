@@ -10,6 +10,6 @@ ckpt=runs/segment/yolo11m/weights/best.pt
 data=tasks/cfg/datasets/segment.yaml
 phase='test'
 name=yolo11m_$phase
-project=tests_runs
-CUDA_VISIBLE_DEVICES=3 python tasks/test.py --model $model --ckpt $ckpt --data $data --phase $phase --name $name --project $project
+project=test_runs/segment
+CUDA_VISIBLE_DEVICES=2 python tasks/test.py --model $model --ckpt $ckpt --data $data --phase $phase --name $name --project $project
 #echo --model $model --ckpt $ckpt --data $data --phase $phase --name $name

@@ -8,6 +8,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.fft as fft
 
 __all__ = (
     "Conv",
@@ -21,6 +22,7 @@ __all__ = (
     "ChannelAttention",
     "SpatialAttention",
     "CBAM",
+    "SFAM",
     "Concat",
     "RepConv",
     "Index",
@@ -149,7 +151,7 @@ class Conv2(Conv):
         """Fuse parallel convolutions."""
         w = torch.zeros_like(self.conv.weight.data)
         i = [x // 2 for x in w.shape[2:]]
-        w[:, :, i[0] : i[0] + 1, i[1] : i[1] + 1] = self.cv2.weight.data.clone()
+        w[:, :, i[0]: i[0] + 1, i[1]: i[1] + 1] = self.cv2.weight.data.clone()
         self.conv.weight.data += w
         self.__delattr__("cv2")
         self.forward = self.forward_fuse
@@ -650,6 +652,68 @@ class CBAM(nn.Module):
             (torch.Tensor): Attended output tensor.
         """
         return self.spatial_attention(self.channel_attention(x))
+
+
+class FrequencyAttention(nn.Module):
+    def __init__(self, in_channels, reduction_ratio=16):
+        super().__init__()
+        self.in_channels = in_channels
+        self.reduction_ratio = reduction_ratio
+
+        self.attention_net = nn.Sequential(
+            nn.Conv2d(in_channels * 2, in_channels // reduction_ratio, kernel_size=1),
+            nn.BatchNorm2d(in_channels // reduction_ratio),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // reduction_ratio, in_channels, kernel_size=1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        original_dtype = x.dtype
+        B, C, H, W = x.shape
+
+        with torch.cuda.amp.autocast(enabled=False):  # 禁用AMP以确保精度稳定
+            x = x.to(torch.float32)
+
+            x_fft = torch.fft.rfft2(x, norm='ortho')
+
+            real = x_fft.real
+            imag = x_fft.imag
+
+            combined = torch.cat([real, imag], dim=1)
+
+            attention_weights = self.attention_net(combined)
+
+            real_weighted = real * attention_weights
+            imag_weighted = imag * attention_weights
+
+            x_fft_weighted = torch.complex(real_weighted, imag_weighted)
+
+            output = torch.fft.irfft2(x_fft_weighted, s=(H, W), norm='ortho')
+
+        return output.to(original_dtype)
+
+
+class SFAM(nn.Module):
+    """
+    Scale-wise Feature Aggregation Module with frequency and spatial attention.
+
+    Combines frequency-domain and spatial-domain attention mechanisms for
+    multi-scale feature enhancement. This module is inspired by feature pyramid
+    aggregation techniques used in modern object detectors[2,4](@ref).
+
+    Attributes:
+        frequency_attention (FrequencyAttention): Frequency-domain attention module.
+        spatial_attention (SpatialAttention): Spatial-domain attention module.
+    """
+
+    def __init__(self, in_channels, kernel_size=7, reduction_ratio=8):
+        super().__init__()
+        self.frequency_attention = FrequencyAttention(in_channels, reduction_ratio)
+        self.spatial_attention = SpatialAttention(kernel_size)
+
+    def forward(self, x):
+        return self.spatial_attention(self.frequency_attention(x))
 
 
 class Concat(nn.Module):

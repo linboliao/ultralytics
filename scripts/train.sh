@@ -6,15 +6,15 @@ export MKL_THREADING_LAYER=GNU
 export MKL_SERVICE_FORCE_INTEL=1
 
 model=yolo # yolo yoloe rtdetr yoloworld
-ckpt=runs/segment/yolo12l/weights/last.pt
+ckpt=tasks/cfg/models/yolo12-seg-SFAM.yaml
 data=tasks/cfg/datasets/segment.yaml
 epoches=500
 patience=100
 image_size=1024
-gpu_ids='1,2,3,4,5'
-batch=5
+gpu_ids='0'
+batch=2
 lr=0.01
-name=yolo12l
+name=yolo12-sfam
 project=runs
-python tasks/train.py --model $model --ckpt $ckpt --data $data --epoches $epoches --image_size $image_size --gpu_ids $gpu_ids --batch $batch --lr0 $lr --name $name --project $project --resume
+CUDA_VISIBLE_DEVICES=0 python tasks/train.py --model $model --ckpt $ckpt --data $data --epoches $epoches --image_size $image_size --gpu_ids $gpu_ids --batch $batch --lr0 $lr --name $name #--project $project --resume
 #echo --model $model --ckpt $ckpt --data $data --epoches $epoches --image_size $image_size --gpu_ids $gpu_ids --batch $batch --lr0 $lr --name $name # --resume
