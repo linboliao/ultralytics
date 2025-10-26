@@ -170,7 +170,21 @@ def run_yolo(args):
     ]
     if not run_command(path, patch_cmd, "WSI生成coords"):
         return False
-
+    path = work_dir.get('ultralytics')
+    yolo_cmd = [
+        f"{conda_path}/ultralytics/bin/python",
+        os.path.join(path, 'infer/yolo2x.py'),
+        "--model", 'yolo',
+        "--task", 'detect',
+        "--data_coors_dir", coord_dir,
+        "--data_slide_dir", args.wsi_dir,
+        "--ckpts", 'runs/detect/yolo11s_0512/weights/best.pt;runs/detect/yolo11s_0702/weights/best.pt;runs/detect/cbam/weights/best.pt;runs/detect/pki/weights/best.pt',
+        "--slide_ext", '.kfb;.svs',
+        "--batch_size", '16',
+        "--output_dir", os.path.join(args.output_dir, 'yolo'),
+    ]
+    if not run_command(path, yolo_cmd, "YOLO检测"):
+        return False
     path = work_dir.get('ultralytics')
     yolo_cmd = [
         f"{conda_path}/ultralytics/bin/python",
@@ -179,12 +193,21 @@ def run_yolo(args):
         "--task", 'segment',
         "--data_coors_dir", coord_dir,
         "--data_slide_dir", args.wsi_dir,
-        "--ckpts", 'runs/segment/yolo12n/weights/best.pt',
+        "--ckpts", 'runs/segment/yolo12s/weights/best.pt',
         "--slide_ext", '.kfb;.svs',
         "--batch_size", '32',
         "--output_dir", os.path.join(args.output_dir, 'yolo'),
     ]
-    return run_command(path, yolo_cmd, "YOLO检测")
+    if not run_command(path, yolo_cmd, "YOLO分割"):
+        return False
+    path = work_dir.get('ultralytics')
+    yolo_cmd = [
+        f"{conda_path}/ultralytics/bin/python",
+        os.path.join(path, 'infer/merger.py'),
+        "--input_dir", os.path.join(args.output_dir, 'yolo'),
+        "--output_dir", os.path.join(args.output_dir, 'yolo'),
+    ]
+    return run_command(path, yolo_cmd, "合并")
 
 
 def gen_test_csv(args):
@@ -299,7 +322,7 @@ def run_medical_image_pipeline(
         # 路径配置参数
         wsi_dir: str,
         output_dir: str,
-        slide_list= None,
+        slide_list=None,
 
         patch_level: int = 0,
         wsi_format: str = "svs;kfb",
@@ -508,7 +531,7 @@ if __name__ == "__main__":
     phase2_tasks = [run_cls, run_isup, run_gleason]
     phase2_names = ["癌症诊断", "ISUP诊断", "Gleason诊断"]
 
-    phase2_results = execute_phase_parallel(phase2_tasks, phase2_names,args, max_workers=3)
+    phase2_results = execute_phase_parallel(phase2_tasks, phase2_names, args, max_workers=3)
     all_results.update(phase2_results)
 
     phase2_time = time.time() - st

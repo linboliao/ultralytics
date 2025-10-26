@@ -57,6 +57,20 @@ class YOLO2GeoJsonDetect(YOLO2X):
         results_list = []
         coords_list = []
         pbar = tqdm(loader, desc="Training Epoch", ncols=100)
+
+        def cal_area(_xyxy):
+            x1 = _xyxy[:, 0]
+            y1 = _xyxy[:, 1]
+            x2 = _xyxy[:, 2]
+            y2 = _xyxy[:, 3]
+
+            widths = x2 - x1
+            heights = y2 - y1
+
+            areas = widths * heights
+
+            return torch.sum(areas)
+
         for count, (batch, coords) in enumerate(pbar):
             with torch.no_grad():
                 batch = batch.to(device, non_blocking=True)
@@ -66,14 +80,17 @@ class YOLO2GeoJsonDetect(YOLO2X):
                 result = []
                 for idx in range(batch.size(0)):
                     xyxy, conf, cls = [], [], []
+                    m_count = 0
+                    m_area = 0
                     boxes = [item[idx].boxes for item in results]
                     for j, box in enumerate(boxes):
                         if len(box) > 0:
                             xyxy.extend(box.xyxy)
                             cls.extend(box.cls)
                             if j == len(boxes) - 1:
-                                box.conf *= 0.7
-                            conf.extend(box.conf)
+                                conf.extend(box.conf)
+                            else:
+                                conf.extend(box.conf.detach().clone() * 0.8)
                     if xyxy:
                         xyxy_tensor = torch.stack(xyxy, dim=0)
                         conf_tensor = torch.stack(conf, dim=0)
@@ -84,14 +101,16 @@ class YOLO2GeoJsonDetect(YOLO2X):
                         xyxy_tensor = xyxy_tensor[i]
                         conf_tensor = conf_tensor[i].unsqueeze(1)
                         cls_tensor = cls_tensor[i].unsqueeze(1)
+                        m_count += (cls_tensor == 1).sum().item()
 
+                        m_area += cal_area(xyxy_tensor)
                         box_tensor = torch.cat([xyxy_tensor, conf_tensor, cls_tensor], dim=1)
                         result.append(Boxes(box_tensor, (batch.shape[2], batch.shape[3])))
                     else:
                         result.append(None)
-
-            results_list.append(result)
-            coords_list.append(coords)
+            if m_count > 3 or m_area > batch.size(2) * batch.size(3) * 0.1:
+                results_list.append(result)
+                coords_list.append(coords)
         self.tissue_area = batch.shape[2] * batch.shape[3] * len(loader)
         return results_list, coords_list
 
