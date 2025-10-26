@@ -13,7 +13,6 @@ parser.add_argument('--gpu_ids', type=str, help='GPU device ID(s) to use (e.g., 
 parser.add_argument('--batch', type=int, help='Training batch size')
 parser.add_argument('--lr0', type=float, help='Initial learning rate')
 parser.add_argument('--name', type=str, help='Training experiment name')
-parser.add_argument('--project', type=str, default=None)
 parser.add_argument('--resume', action='store_true', help='Resume the training')
 parser.add_argument('--patience', type=int, help='Early stopping patience')
 args = parser.parse_args()
@@ -30,4 +29,4 @@ elif args.model == 'yoloworld':
 else:
     raise ValueError(f"Unsupported model type: {args.model}")
 
-results = model.train(data=args.data, epochs=args.epoches, imgsz=args.image_size, device=args.gpu_ids, batch=args.batch, patience=args.patience, lr0=args.lr0, trainer=trainer, name=args.name, resume=args.resume, project=args.project)
+results = model.train(data=args.data, epochs=args.epoches, imgsz=args.image_size, device=args.gpu_ids, batch=args.batch, patience=args.patience, lr0=args.lr0, trainer=trainer, name=args.name, resume=args.resume)
