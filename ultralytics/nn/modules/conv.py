@@ -670,26 +670,27 @@ class FrequencyAttention(nn.Module):
 
     def forward(self, x):
         original_dtype = x.dtype
+
+        x = x.to(torch.float32)
+
         B, C, H, W = x.shape
+        x_fft = fft.rfft2(x, norm='ortho')
 
-        with torch.cuda.amp.autocast(enabled=False):  # 禁用AMP以确保精度稳定
-            x = x.to(torch.float32)
+        real = x_fft.real
+        imag = x_fft.imag
+        real = real.to(original_dtype)
+        imag = imag.to(original_dtype)
 
-            x_fft = torch.fft.rfft2(x, norm='ortho')
+        combined = torch.cat([real, imag], dim=1)
+        attention_weights = self.attention_net(combined)
 
-            real = x_fft.real
-            imag = x_fft.imag
+        real_weighted = real * attention_weights
+        imag_weighted = imag * attention_weights
+        real_weighted = real_weighted.to(torch.float32)
+        imag_weighted = imag_weighted.to(torch.float32)
+        x_fft_weighted = torch.complex(real_weighted, imag_weighted)
 
-            combined = torch.cat([real, imag], dim=1)
-
-            attention_weights = self.attention_net(combined)
-
-            real_weighted = real * attention_weights
-            imag_weighted = imag * attention_weights
-
-            x_fft_weighted = torch.complex(real_weighted, imag_weighted)
-
-            output = torch.fft.irfft2(x_fft_weighted, s=(H, W), norm='ortho')
+        output = fft.irfft2(x_fft_weighted, s=(H, W), norm='ortho')
 
         return output.to(original_dtype)
 
