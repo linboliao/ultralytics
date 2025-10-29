@@ -714,7 +714,8 @@ class SFAM(nn.Module):
         self.spatial_attention = SpatialAttention(kernel_size)
 
     def forward(self, x):
-        return self.spatial_attention(self.frequency_attention(x))
+        # return self.spatial_attention(self.frequency_attention(x))
+        return self.frequency_attention(x)
 
 
 class Concat(nn.Module):
