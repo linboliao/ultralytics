@@ -62,7 +62,6 @@ from .block import (
 )
 from .conv import (
     CBAM,
-    SFAM,
     ChannelAttention,
     Concat,
     Conv,
@@ -102,6 +101,11 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
+from .custom_block import (
+    FrequencyAttention,
+    MultiScalConv,
+    BoundaryAttention,
+)
 from .PKI import C2f_PKIBlock, C3k2PKI
 
 __all__ = (
@@ -117,7 +121,6 @@ __all__ = (
     "ChannelAttention",
     "SpatialAttention",
     "CBAM",
-    "SFAM",
     "Concat",
     "TransformerLayer",
     "TransformerBlock",
@@ -184,4 +187,7 @@ __all__ = (
     "A2C2f",
     "C2f_PKIBlock",
     "C3k2PKI",
+    "FrequencyAttention",
+    "MultiScalConv",
+    "BoundaryAttention",
 )

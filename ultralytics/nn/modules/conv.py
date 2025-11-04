@@ -8,7 +8,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.fft as fft
+
 
 __all__ = (
     "Conv",
@@ -22,7 +22,6 @@ __all__ = (
     "ChannelAttention",
     "SpatialAttention",
     "CBAM",
-    "SFAM",
     "Concat",
     "RepConv",
     "Index",
@@ -652,70 +651,6 @@ class CBAM(nn.Module):
             (torch.Tensor): Attended output tensor.
         """
         return self.spatial_attention(self.channel_attention(x))
-
-
-class FrequencyAttention(nn.Module):
-    def __init__(self, in_channels, reduction_ratio=16):
-        super().__init__()
-        self.in_channels = in_channels
-        self.reduction_ratio = reduction_ratio
-
-        self.attention_net = nn.Sequential(
-            nn.Conv2d(in_channels * 2, in_channels // reduction_ratio, kernel_size=1),
-            nn.BatchNorm2d(in_channels // reduction_ratio),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels // reduction_ratio, in_channels, kernel_size=1),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        original_dtype = x.dtype
-
-        x = x.to(torch.float32)
-
-        B, C, H, W = x.shape
-        x_fft = fft.rfft2(x, norm='ortho')
-
-        real = x_fft.real
-        imag = x_fft.imag
-        real = real.to(original_dtype)
-        imag = imag.to(original_dtype)
-
-        combined = torch.cat([real, imag], dim=1)
-        attention_weights = self.attention_net(combined)
-
-        real_weighted = real * attention_weights
-        imag_weighted = imag * attention_weights
-        real_weighted = real_weighted.to(torch.float32)
-        imag_weighted = imag_weighted.to(torch.float32)
-        x_fft_weighted = torch.complex(real_weighted, imag_weighted)
-
-        output = fft.irfft2(x_fft_weighted, s=(H, W), norm='ortho')
-
-        return output.to(original_dtype)
-
-
-class SFAM(nn.Module):
-    """
-    Scale-wise Feature Aggregation Module with frequency and spatial attention.
-
-    Combines frequency-domain and spatial-domain attention mechanisms for
-    multi-scale feature enhancement. This module is inspired by feature pyramid
-    aggregation techniques used in modern object detectors[2,4](@ref).
-
-    Attributes:
-        frequency_attention (FrequencyAttention): Frequency-domain attention module.
-        spatial_attention (SpatialAttention): Spatial-domain attention module.
-    """
-
-    def __init__(self, in_channels, kernel_size=7, reduction_ratio=8):
-        super().__init__()
-        self.frequency_attention = FrequencyAttention(in_channels, reduction_ratio)
-        self.spatial_attention = SpatialAttention(kernel_size)
-
-    def forward(self, x):
-        # return self.spatial_attention(self.frequency_attention(x))
-        return self.frequency_attention(x)
 
 
 class Concat(nn.Module):
