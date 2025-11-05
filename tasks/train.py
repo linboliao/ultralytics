@@ -15,6 +15,7 @@ parser.add_argument('--lr0', type=float, help='Initial learning rate')
 parser.add_argument('--name', type=str, help='Training experiment name')
 parser.add_argument('--resume', action='store_true', help='Resume the training')
 parser.add_argument('--patience', type=int, help='Early stopping patience')
+parser.add_argument('--project', type=str, help='result save dir')
 parser.add_argument('--no_amp', action='store_false', help='close amp')
 args = parser.parse_args()
 trainer = None
@@ -30,4 +31,4 @@ elif args.model == 'yoloworld':
 else:
     raise ValueError(f"Unsupported model type: {args.model}")
 
-results = model.train(data=args.data, epochs=args.epoches, imgsz=args.image_size, device=args.gpu_ids, batch=args.batch, patience=args.patience, lr0=args.lr0, trainer=trainer, name=args.name, resume=args.resume, amp=args.no_amp)
+results = model.train(data=args.data, epochs=args.epoches, imgsz=args.image_size, device=args.gpu_ids, batch=args.batch, patience=args.patience, lr0=args.lr0, trainer=trainer, name=args.name, resume=args.resume, project=args.project, amp=args.no_amp)

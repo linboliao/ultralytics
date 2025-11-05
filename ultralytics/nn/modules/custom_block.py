@@ -200,11 +200,10 @@ class BoundaryAttention(nn.Module):
             nn.Sigmoid()
         )
 
+        self.channel_align = nn.Conv2d(1, c1, kernel_size=1, bias=True)
         self.shortcut = nn.Identity()
 
     def forward(self, x):
-        identity = x
-
         gray_x = torch.mean(x, dim=1, keepdim=True)
         grad_x = self.sobel_conv_x(gray_x)
         grad_y = self.sobel_conv_y(gray_x)
@@ -212,4 +211,5 @@ class BoundaryAttention(nn.Module):
         sobel_feat = torch.sqrt(grad_x ** 2 + grad_y ** 2)
         boundary_feat = self.boundary(x)
         combined_feat = sobel_feat + boundary_feat
-        return combined_feat + self.shortcut(identity)
+        aligned_feat = self.channel_align(combined_feat)
+        return aligned_feat + self.shortcut(x)

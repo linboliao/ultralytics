@@ -107,7 +107,7 @@ def calculate(images_dir, labels_dir, num_classes):
 
                 cls_id = int(results[0].boxes.cls[i].item())
                 pred_mask[cls_id] = np.logical_or(pred_mask[cls_id], binary_mask).astype(np.uint8)
-            result = multi_class_metrics(true_mask, pred_mask)
+            result = multi_class_metrics(pred_mask, true_mask)
         elif true_mask.max() > 0:
             result = {'dice': 0, 'iou': 0}
         else:
