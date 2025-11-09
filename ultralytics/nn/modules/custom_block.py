@@ -13,6 +13,7 @@ __all__ = (
 )
 
 from ultralytics.nn.modules import Conv, CBAM, ChannelAttention
+from ultralytics.nn.modules.block import C3k2
 
 
 # class FrequencyAttention(nn.Module):
@@ -156,13 +157,13 @@ class MultiScalConv(nn.Module):
     """
     分块处理图片降低参数
     """
-
+    # TODO 实现多层多尺度代码
     def __init__(self, c1, c2):
         super().__init__()
-        self.img_conv = Conv(c1, c1, 7, 2, d=2)
-        self.patch_conv = Conv(c1, c1, 5, 1)
-        self.channel_attention = ChannelAttention(c1 * 5)
-        self.feature_conv = Conv(c1 * 5, c2, 3, 2)
+        self.img_conv = Conv(c1, c2, 7, 2, d=2)
+        self.patch_conv = Conv(c1, c2, 3, 1)
+        self.channel_attention = ChannelAttention(c2 * 5)
+        self.feature_conv = Conv(c2 * 5, c2, 1, 1)
 
     def forward(self, x):
         img_feat = self.img_conv(x)
@@ -170,7 +171,8 @@ class MultiScalConv(nn.Module):
         for patch in patches(x):
             patch_feats.append(self.patch_conv(patch))
         feats = torch.cat(patch_feats + [img_feat], 1)
-        return self.feature_conv(self.channel_attention(feats))
+        # return self.feature_conv(self.channel_attention(feats))
+        return self.feature_conv(feats)
 
 
 class BoundaryAttention(nn.Module):
