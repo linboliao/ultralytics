@@ -89,10 +89,14 @@ class YOLO2GeoJsonDetect(YOLO2X):
                         if len(box) > 0:
                             xyxy_all.extend(box.xyxy)
                             cls_all.extend(box.cls)
-                            conf = box.conf
-                            if box.cls !=1:
-                                conf *= 0.8
-                            conf_all.extend(conf)
+                            adjusted_conf = []
+                            for i in range(len(box)):
+                                if box.cls[i] != 1:  # 类别不是1
+                                    adjusted_conf.append(box.conf[i] * 0.8)
+                                else:  # 类别是1，保持原置信度
+                                    adjusted_conf.append(box.conf[i])
+
+                            conf_all.extend(torch.stack(adjusted_conf))
 
                     if xyxy_all:
                         xyxy_tensor = torch.stack(xyxy_all, dim=0)
@@ -128,8 +132,14 @@ class YOLO2GeoJsonDetect(YOLO2X):
                             if len(box) > 0:
                                 xyxy_B.extend(box.xyxy)
                                 cls_B.extend(box.cls)
-                                # 置信度调整：前三个模型都乘以0.8
-                                conf_B.extend(box.conf.detach().clone() * 0.8)
+                                adjusted_conf = []
+                                for i in range(len(box)):
+                                    if box.cls[i] != 1:  # 类别不是1
+                                        adjusted_conf.append(box.conf[i] * 0.8)
+                                    else:  # 类别是1，保持原置信度
+                                        adjusted_conf.append(box.conf[i])
+
+                                conf_B.extend(torch.stack(adjusted_conf))
 
                         # 将第一阶段过滤后的结果A与前三个模型的结果B合并
                         if xyxy_B:
