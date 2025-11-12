@@ -9,10 +9,10 @@ import openslide
 from PIL import Image
 from openslide import lowlevel
 
-sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
+sys.path.insert(0, r'/NAS3/lbliao/Code/aslide/')
 from aslide import Aslide
 
-sys.path.insert(1, r'/data2/lbliao/Code/opensdpc/')
+sys.path.insert(1, r'/NAS3/lbliao/Code/opensdpc/')
 from opensdpc.opensdpc import OpenSdpc
 
 
