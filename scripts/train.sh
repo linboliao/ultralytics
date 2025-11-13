@@ -6,13 +6,13 @@ export MKL_THREADING_LAYER=GNU
 export MKL_SERVICE_FORCE_INTEL=1
 
 model=yolo # yolo yoloe rtdetr yoloworld
-ckpt=runs/segment/yolo12s-mscv32/weights/last.pt
+ckpt=tasks/cfg/models/yolo12-seg-mscv3.yaml
 data=tasks/cfg/datasets/segment.yaml
 epoches=500
 patience=100
 image_size=1024
-gpu_ids='0,1'
-batch=4
+gpu_ids='2,3,4,5,7'
+batch=5
 lr=0.01
 name=yolo12s-mscv3
 project=runs/segment

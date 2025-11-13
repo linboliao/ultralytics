@@ -12,7 +12,7 @@ __all__ = (
     "BoundaryAttention",
 )
 
-from ultralytics.nn.modules import Conv, CBAM, ChannelAttention
+from ultralytics.nn.modules import Conv, CBAM, ChannelAttention, A2C2f
 from ultralytics.nn.modules.block import C3k2
 
 
@@ -153,26 +153,95 @@ def patches(x):
     return patches
 
 
+# class MultiScalConv(nn.Module):
+#     """
+#     分块处理图片降低参数
+#     """
+#
+#     # TODO 实现多层多尺度代码
+#     def __init__(self, c1, c2):
+#         super().__init__()
+#         self.img_conv = Conv(c1, c2, 7, 2, d=2)
+#         self.patch_conv = Conv(c1, c2, 3, 1)
+#         self.channel_attention = ChannelAttention(c2 * 5)
+#         self.feature_conv = Conv(c2 * 5, c2, 1, 1)
+#
+#     def forward(self, x):
+#         img_feat = self.img_conv(x)
+#         patch_feats = []
+#         for patch in patches(x):
+#             patch_feats.append(self.patch_conv(patch))
+#         feats = torch.cat(patch_feats + [img_feat], 1)
+#         # return self.feature_conv(self.channel_attention(feats))
+#         return self.feature_conv(feats)
+
+
+# - [-1, 1, Conv, [64, 3, 2]]  # 0-P1/2
+# - [-1, 1, Conv, [128, 3, 2]]  # 1-P2/4
+# - [-1, 2, C3k2, [256, False, 0.25]]
+# - [-1, 1, Conv, [256, 3, 2]]  # 3-P3/8
+# - [-1, 2, C3k2, [512, False, 0.25]]
+# - [-1, 1, Conv, [512, 3, 2]]  # 5-P4/16
+# - [-1, 4, A2C2f, [512, True, 4]]
+# - [-1, 1, Conv, [1024, 3, 2]]  # 7-P5/32
+# - [-1, 4, A2C2f, [1024, True, 1]]  # 8
 class MultiScalConv(nn.Module):
-    """
-    分块处理图片降低参数
-    """
-    # TODO 实现多层多尺度代码
     def __init__(self, c1, c2):
         super().__init__()
-        self.img_conv = Conv(c1, c2, 7, 2, d=2)
+        self.img_conv = Conv(c1, c2, 5, 2, d=2)
         self.patch_conv = Conv(c1, c2, 3, 1)
-        self.channel_attention = ChannelAttention(c2 * 5)
-        self.feature_conv = Conv(c2 * 5, c2, 1, 1)
 
     def forward(self, x):
         img_feat = self.img_conv(x)
         patch_feats = []
         for patch in patches(x):
             patch_feats.append(self.patch_conv(patch))
-        feats = torch.cat(patch_feats + [img_feat], 1)
-        # return self.feature_conv(self.channel_attention(feats))
-        return self.feature_conv(feats)
+        return torch.cat(patch_feats + [img_feat], 1)
+
+
+class CustomConv(Conv):
+    def forward(self, x):
+        x_split = torch.chunk(x, chunks=5, dim=1)
+
+        parts = []
+        for x_part in x_split:
+            parts.append(self.act(self.bn(self.conv(x_part))))
+
+        return torch.cat(parts, dim=1)
+
+
+class CustomC3k2(C3k2):
+    def forward(self, x):
+        x_split = torch.chunk(x, chunks=5, dim=1)
+        parts = []
+        for x_part in x_split:
+            y = list(self.cv1(x_part).chunk(2, 1))
+            y.extend(m(y[-1]) for m in self.m)
+            parts.append(self.cv2(torch.cat(y, 1)))
+        return torch.cat(parts, dim=1)
+
+
+class CustomA2C2f(A2C2f):
+    def forward(self, x):
+        x_split = torch.chunk(x, chunks=5, dim=1)
+        parts = []
+        for x_part in x_split:
+            y = [self.cv1(x_part)]
+            y.extend(m(y[-1]) for m in self.m)
+            y = self.cv2(torch.cat(y, 1))
+            if self.gamma is not None:
+                y = x_part + self.gamma.view(-1, self.gamma.shape[0], 1, 1) * y
+            parts.append(y)
+        return torch.cat(parts, dim=1)
+
+
+class CustomChannelAttention(ChannelAttention):
+    def __init__(self, channels: int):
+        super().__init__(channels * 5)
+        self.feature_conv = Conv(channels * 5, channels, 1, 1)
+
+    def forward(self, x):
+        return self.feature_conv(x * self.act(self.fc(self.pool(x))))
 
 
 class BoundaryAttention(nn.Module):

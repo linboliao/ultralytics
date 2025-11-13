@@ -74,6 +74,10 @@ from ultralytics.nn.modules import (
     CBAM,
     FrequencyAttention,
     MultiScalConv,
+    CustomConv,
+    CustomC3k2,
+    CustomA2C2f,
+    CustomChannelAttention,
     BoundaryAttention,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1570,6 +1574,7 @@ def parse_model(d, ch, verbose=True):
             Classify,
             Conv,
             MultiScalConv,
+            CustomConv,
             ConvTranspose,
             GhostConv,
             Bottleneck,
@@ -1585,6 +1590,7 @@ def parse_model(d, ch, verbose=True):
             C2,
             C2f,
             C3k2,
+            CustomC3k2,
             C3k2PKI,
             RepNCSPELAN4,
             ELAN1,
@@ -1603,6 +1609,7 @@ def parse_model(d, ch, verbose=True):
             SCDown,
             C2fCIB,
             A2C2f,
+            CustomA2C2f,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1612,6 +1619,7 @@ def parse_model(d, ch, verbose=True):
             C2,
             C2f,
             C3k2,
+            CustomC3k2,
             C3k2PKI,
             C2fAttn,
             C3,
@@ -1623,6 +1631,7 @@ def parse_model(d, ch, verbose=True):
             C2fCIB,
             C2PSA,
             A2C2f,
+            CustomA2C2f,
         }
     )
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
@@ -1650,11 +1659,11 @@ def parse_model(d, ch, verbose=True):
             if m in repeat_modules:
                 args.insert(2, n)  # number of repeats
                 n = 1
-            if m is C3k2 or m is C3k2PKI:  # for M/L/X sizes
+            if m is C3k2 or m is C3k2PKI or m is CustomC3k2:  # for M/L/X sizes
                 legacy = False
                 if scale in "mlx":
                     args[3] = True
-            if m is A2C2f:
+            if m is A2C2f or m is CustomA2C2f:
                 legacy = False
                 if scale in "lx":  # for L/X sizes
                     args.extend((True, 1.2))
@@ -1694,7 +1703,7 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
-        elif m in [CBAM, FrequencyAttention, BoundaryAttention]:
+        elif m in [CBAM, FrequencyAttention, BoundaryAttention, CustomChannelAttention]:
             c1 = ch[f]
             args = [c1]
         else:

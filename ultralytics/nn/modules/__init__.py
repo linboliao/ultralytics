@@ -104,6 +104,10 @@ from .transformer import (
 from .custom_block import (
     FrequencyAttention,
     MultiScalConv,
+    CustomConv,
+    CustomC3k2,
+    CustomA2C2f,
+    CustomChannelAttention,
     BoundaryAttention,
 )
 from .PKI import C2f_PKIBlock, C3k2PKI
@@ -189,5 +193,9 @@ __all__ = (
     "C3k2PKI",
     "FrequencyAttention",
     "MultiScalConv",
+    "CustomConv",
+    "CustomC3k2",
+    "CustomA2C2f",
+    "CustomChannelAttention",
     "BoundaryAttention",
 )
