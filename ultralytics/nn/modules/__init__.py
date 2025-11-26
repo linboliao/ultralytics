@@ -101,14 +101,14 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
-from .custom_block import (
+from .msc_v1 import (
     FrequencyAttention,
-    MultiScalConv,
-    CustomConv,
-    CustomC3k2,
-    CustomA2C2f,
-    CustomChannelAttention,
+    MSConv,
+    MSC3k2,
+    MSA2C2f,
+    MSFusionV1,
     BoundaryAttention,
+    CustomSegment,
 )
 from .PKI import C2f_PKIBlock, C3k2PKI
 
@@ -192,10 +192,10 @@ __all__ = (
     "C2f_PKIBlock",
     "C3k2PKI",
     "FrequencyAttention",
-    "MultiScalConv",
-    "CustomConv",
-    "CustomC3k2",
-    "CustomA2C2f",
-    "CustomChannelAttention",
+    "MSConv",
+    "MSC3k2",
+    "MSA2C2f",
+    "MSFusionV1",
     "BoundaryAttention",
+    "CustomSegment",
 )

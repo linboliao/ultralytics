@@ -72,13 +72,14 @@ from ultralytics.nn.modules import (
 )
 from ultralytics.nn.modules import (
     CBAM,
+    ChannelAttention,
     FrequencyAttention,
-    MultiScalConv,
-    CustomConv,
-    CustomC3k2,
-    CustomA2C2f,
-    CustomChannelAttention,
+    MSConv,
+    MSC3k2,
+    MSA2C2f,
+    MSFusionV1,
     BoundaryAttention,
+    CustomSegment,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -422,7 +423,7 @@ class DetectionModel(BaseModel):
                 """Perform a forward pass through the model, handling different Detect subclass types accordingly."""
                 if self.end2end:
                     return self.forward(x)["one2many"]
-                return self.forward(x)[0] if isinstance(m, (Segment, YOLOESegment, Pose, OBB)) else self.forward(x)
+                return self.forward(x)[0] if isinstance(m, (Segment, CustomSegment, YOLOESegment, Pose, OBB)) else self.forward(x)
 
             self.model.eval()  # Avoid changing batch statistics until training begins
             m.training = True  # Setting it to True to properly return strides
@@ -1573,8 +1574,7 @@ def parse_model(d, ch, verbose=True):
         {
             Classify,
             Conv,
-            MultiScalConv,
-            CustomConv,
+            MSConv,
             ConvTranspose,
             GhostConv,
             Bottleneck,
@@ -1590,7 +1590,7 @@ def parse_model(d, ch, verbose=True):
             C2,
             C2f,
             C3k2,
-            CustomC3k2,
+            MSC3k2,
             C3k2PKI,
             RepNCSPELAN4,
             ELAN1,
@@ -1609,7 +1609,7 @@ def parse_model(d, ch, verbose=True):
             SCDown,
             C2fCIB,
             A2C2f,
-            CustomA2C2f,
+            MSA2C2f,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1619,7 +1619,7 @@ def parse_model(d, ch, verbose=True):
             C2,
             C2f,
             C3k2,
-            CustomC3k2,
+            MSC3k2,
             C3k2PKI,
             C2fAttn,
             C3,
@@ -1631,7 +1631,7 @@ def parse_model(d, ch, verbose=True):
             C2fCIB,
             C2PSA,
             A2C2f,
-            CustomA2C2f,
+            MSA2C2f,
         }
     )
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
@@ -1659,11 +1659,11 @@ def parse_model(d, ch, verbose=True):
             if m in repeat_modules:
                 args.insert(2, n)  # number of repeats
                 n = 1
-            if m is C3k2 or m is C3k2PKI or m is CustomC3k2:  # for M/L/X sizes
+            if m is C3k2 or m is C3k2PKI or m is MSC3k2:  # for M/L/X sizes
                 legacy = False
                 if scale in "mlx":
                     args[3] = True
-            if m is A2C2f or m is CustomA2C2f:
+            if m is A2C2f or m is MSA2C2f:
                 legacy = False
                 if scale in "lx":  # for L/X sizes
                     args.extend((True, 1.2))
@@ -1684,12 +1684,12 @@ def parse_model(d, ch, verbose=True):
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
         elif m in frozenset(
-                {Detect, WorldDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB, ImagePoolingAttn, v10Detect}
+                {Detect, WorldDetect, YOLOEDetect, Segment, CustomSegment, YOLOESegment, Pose, OBB, ImagePoolingAttn, v10Detect}
         ):
             args.append([ch[x] for x in f])
-            if m is Segment or m is YOLOESegment:
+            if m is Segment or m is YOLOESegment or m is CustomSegment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB}:
+            if m in {Detect, YOLOEDetect, Segment, CustomSegment, YOLOESegment, Pose, OBB}:
                 m.legacy = legacy
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])
@@ -1703,7 +1703,7 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
-        elif m in [CBAM, FrequencyAttention, BoundaryAttention, CustomChannelAttention]:
+        elif m in [CBAM, FrequencyAttention, BoundaryAttention, ChannelAttention, MSFusionV1]:
             c1 = ch[f]
             args = [c1]
         else:
@@ -1801,7 +1801,7 @@ def guess_model_task(model):
             with contextlib.suppress(Exception):
                 return cfg2task(eval(x))
         for m in model.modules():
-            if isinstance(m, (Segment, YOLOESegment)):
+            if isinstance(m, (Segment, YOLOESegment, CustomSegment)):
                 return "segment"
             elif isinstance(m, Classify):
                 return "classify"

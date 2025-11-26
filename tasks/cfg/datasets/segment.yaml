@@ -3,17 +3,17 @@ path:
 train:
   - /NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/train/images
   - /NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订/dataset/1024/train/images
-  - /NAS2/Data1/lbliao/Data/MXB/segment/神经节补充数据/dataset/1024/train/images
+#  - /NAS2/Data1/lbliao/Data/MXB/segment/神经节补充数据/dataset/1024/train/images
   - /NAS2/Data1/lbliao/Data/MXB/segment/补充神经节标注/dataset/1024/train/images
 val:
   - /NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/val/images
   - /NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订/dataset/1024/val/images
-  - /NAS2/Data1/lbliao/Data/MXB/segment/神经节补充数据/dataset/1024/val/images
+#  - /NAS2/Data1/lbliao/Data/MXB/segment/神经节补充数据/dataset/1024/val/images
   - /NAS2/Data1/lbliao/Data/MXB/segment/补充神经节标注/dataset/1024/val/images
 test:
   - /NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/test/images
   - /NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订/dataset/1024/test/images
-  - /NAS2/Data1/lbliao/Data/MXB/segment/神经节补充数据/dataset/1024/test/images
+#  - /NAS2/Data1/lbliao/Data/MXB/segment/神经节补充数据/dataset/1024/test/images
   - /NAS2/Data1/lbliao/Data/MXB/segment/补充神经节标注/dataset/1024/test/images
 names:
     0: Benign
