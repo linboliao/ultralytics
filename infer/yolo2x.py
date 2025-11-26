@@ -10,6 +10,8 @@ import cv2
 import numpy as np
 import pandas as pd
 import torch
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
 from torch.utils.data import DataLoader
 from torchvision import transforms, ops
 from tqdm import tqdm
@@ -204,7 +206,7 @@ class YOLO2GeoJsonDetect(YOLO2X):
 
     def post_process(self, results_list, coords_list, output_path):
         features = []
-        malignant_area = 0.0
+        malignant_polygons= []
         for results, coords in zip(results_list, coords_list):
             for boxes, coord in zip(results, coords):
                 coord = coord.to('cpu').tolist()
@@ -227,7 +229,8 @@ class YOLO2GeoJsonDetect(YOLO2X):
                         polygon_coordinates = [[[x1, y1], [x2, y1], [x2, y2], [x1, y2], [x1, y1]]]
                         label = self.labels[cls_list[i]]
                         if cls_list[i] == 1:
-                            malignant_area += (x2 - x1) * (y2 - y1)
+                            rect = Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
+                            malignant_polygons.append(rect)
 
                         feature = {
                             "type": "Feature",
@@ -250,10 +253,18 @@ class YOLO2GeoJsonDetect(YOLO2X):
             "features": features
         }
 
+        if malignant_polygons:
+            merged_malignant = unary_union(malignant_polygons)
+            if merged_malignant.geom_type == 'MultiPolygon':
+                malignant_area = sum(poly.area for poly in merged_malignant.geoms)
+            else:
+                malignant_area = merged_malignant.area
+        else:
+            malignant_area = 0.0
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(geojson_dict, f, indent=2, ensure_ascii=False)
 
-        self.malignant_area = malignant_area
+    self.malignant_area = malignant_area
 
 
 class YOLO2GeoJsonSegment(YOLO2X):
