@@ -101,7 +101,7 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
-from .msc_v1 import (
+from .msc_v3 import (
     FrequencyAttention,
     MSConv,
     MSC3k2,

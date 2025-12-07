@@ -1,11 +1,15 @@
 import json
 import os
-import time
 
 import torch
 import numpy as np
 import pandas as pd
 import argparse
+
+import monai
+from monai.metrics import DiceMetric, MeanIoU
+from monai.transforms import AsDiscrete, Activations
+from monai.data import decollate_batch
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image, ImageDraw
@@ -169,13 +173,54 @@ def calculate(dataloader, model, args):
                     pred[cls_id] = np.logical_or(pred[cls_id], mask).astype(np.uint8)
                 label = label.numpy()
                 result_metrics = multi_class_metrics(pred, label)
-            elif label.max() > 0:
-                result_metrics = {'dice': 0, 'iou': 0}
+            # elif label.max() > 0:
+            #     result_metrics = {'dice': 0, 'iou': 0}
             else:
                 continue
 
             iou_scores.append(result_metrics.get('iou'))
             dice_scores.append(result_metrics.get('dice'))
+
+    iou_scores = pd.Series(iou_scores).dropna().tolist()
+    dice_scores = pd.Series(dice_scores).dropna().tolist()
+    return np.mean(dice_scores), np.mean(iou_scores)
+
+
+def calculate1(dataloader, model, include_background=True):
+    iou_scores = []
+    dice_scores = []
+    dice_metric = DiceMetric(include_background=include_background, reduction="mean", get_not_nans=False)
+
+    iou_metric = MeanIoU(include_background=include_background, reduction="mean", get_not_nans=False)
+
+    for b_images, b_masks in tqdm(dataloader, desc="模型推理", unit="batch"):
+        results = model(b_images, verbose=False, device='4')
+        preds = []
+        masks = []
+        for result, label in zip(results, b_masks):
+            pred = np.zeros(label.shape, dtype=np.uint8)
+            if result.masks is not None:
+                pred_tensor = result.masks.data.cpu().numpy()
+                for i, mask in enumerate(pred_tensor):
+                    cls_id = int(result.boxes.cls[i].item())
+                    pred[cls_id] = np.logical_or(pred[cls_id], mask).astype(np.uint8)
+                label = label.numpy()
+                preds.append(pred)
+                masks.append(label)
+            else:
+                continue
+        if len(preds) == 0:
+            continue
+        pred = torch.tensor(preds)
+        mask = torch.tensor(masks)
+        dice_metric(y_pred=pred, y=mask)
+        iou_metric(y_pred=pred, y=mask)
+        dice_score = dice_metric.aggregate().item()
+        iou_score = iou_metric.aggregate().item()
+        dice_metric.reset()
+        iou_metric.reset()
+        iou_scores.append(iou_score)
+        dice_scores.append(dice_score)
 
     iou_scores = pd.Series(iou_scores).dropna().tolist()
     dice_scores = pd.Series(dice_scores).dropna().tolist()

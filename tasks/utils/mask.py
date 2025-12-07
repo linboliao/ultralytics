@@ -13,23 +13,22 @@ def overlay_contours(image, mask, color=(0, 255, 0), thickness=2, min_area_ratio
     total_area = h * w
     min_area = total_area * min_area_ratio
 
-    # 查找轮廓
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # 创建原图的副本
     overlay = image.copy()
 
-    # 过滤轮廓，只保留面积大于等于min_area的轮廓
+    contour_mask = np.zeros((h, w), dtype=np.uint8)
+
     filtered_contours = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
         if area >= min_area:
             filtered_contours.append(cnt)
+            cv2.drawContours(contour_mask, [cnt], -1, 1, -1)
 
-    # 绘制过滤后的轮廓
     cv2.drawContours(overlay, filtered_contours, -1, color, thickness)
 
-    return overlay
+    return overlay, contour_mask
 
 
 def get_mask(image):
@@ -86,7 +85,7 @@ def get_mask2(image):
     return mask
 
 
-def get_mask3(image):
+def get_mask3(image, output):
     """
     简化版的平滑分割
     """
@@ -112,20 +111,92 @@ def get_mask3(image):
     smoothed = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel)
     smoothed = cv2.morphologyEx(smoothed, cv2.MORPH_CLOSE, kernel)
     smoothed = cv2.medianBlur(smoothed, 25)
-    print(f'{time.time()-st}')
-    contour = overlay_contours(image_rgb, smoothed)
+    # print(f'{time.time() - st}')
+    contour_image, contour_mask = overlay_contours(image_rgb, smoothed)
+
     plt.figure(figsize=(16, 12))
-    plt.imshow(contour)
-    plt.title('Original Image')
+
+    plt.subplot(1, 2, 1)
+    plt.imshow(contour_image)
+    plt.title('Image with Contours')
     plt.axis('off')
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(contour_mask, cmap='gray')
+    plt.title('Mask')
+    plt.axis('off')
+
+    plt.tight_layout()  # 自动调整子图间距
     plt.show()
-    return contour
+    # cv2.imwrite(output, contour_mask)
+    return contour_mask
+
+
+import os
+from concurrent.futures import ThreadPoolExecutor
+from tqdm import tqdm
+
+
+def process_file_wrapper(args):
+    """包装函数供map使用"""
+    file, img_dir, mask_dir = args
+    try:
+        img_path = os.path.join(img_dir, file)
+        output_path = os.path.join(mask_dir, file)
+        get_mask3(img_path, output_path)
+        return True
+    except Exception:
+        return False
+
+
+def parallel_process_map(img_dir, mask_dir, max_workers=20):
+    """使用map方法的极简版本"""
+    os.makedirs(mask_dir, exist_ok=True)
+
+    files = [f for f in os.listdir(img_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff'))]
+
+    args_list = [(file, img_dir, mask_dir) for file in files]
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(tqdm(
+            executor.map(process_file_wrapper, args_list),
+            total=len(files),
+            desc="处理文件"
+        ))
+
+    successful = sum(results)
+    print(f"完成: {successful}/{len(files)} 个文件处理成功")
+
 
 
 if __name__ == '__main__':
-    img_dir = '/NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/train/images'
-    # image_path = '/NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/train/images/1547583.13_2048_7168.png'
-    # get_mask3(image_path)
-    for file in os.listdir(img_dir):
-        img_path = os.path.join(img_dir, file)
-        get_mask3(img_path)
+    img_dir = [
+        '/NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/train/images',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/val/images',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/test/images',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订/dataset/1024/train/images',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订/dataset/1024/val/images',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订/dataset/1024/test/images',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/补充神经节标注/dataset/1024/train/images',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/补充神经节标注/dataset/1024/val/images',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/补充神经节标注/dataset/1024/test/images',
+    ]
+    mask_dir = [
+        '/NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/train/otsu',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/val/otsu',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/第一批/dataset/1024/test/otsu',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订/dataset/1024/train/otsu',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订/dataset/1024/val/otsu',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/YNZL修订/dataset/1024/test/otsu',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/补充神经节标注/dataset/1024/train/otsu',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/补充神经节标注/dataset/1024/val/otsu',
+        '/NAS2/Data1/lbliao/Data/MXB/segment/补充神经节标注/dataset/1024/test/otsu',
+    ]
+
+    # for img, mask in zip(img_dir, mask_dir):
+    #     # os.makedirs(mask, exist_ok=True)
+    #     parallel_process_map(img, mask)
+    for file in os.listdir(img_dir[0]):
+        img_path = os.path.join(img_dir[0], file)
+        output_path = os.path.join(mask_dir[0], file)
+        get_mask3(img_path, output_path)

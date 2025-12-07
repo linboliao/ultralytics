@@ -9,7 +9,7 @@ import torch.nn as nn
 from torch.nn import Softmax
 from einops import rearrange, repeat
 
-from ultralytics.nn.modules import Conv, A2C2f, Detect
+from ultralytics.nn.modules import Conv, A2C2f, Detect, SpatialAttention
 from ultralytics.nn.modules.block import C3k2, Proto
 
 num_patches = 4
@@ -93,7 +93,7 @@ class MSA2C2f(nn.Module):
         return torch.cat([img] + parts, 1)
 
 
-class MSFusionV1(nn.Module):
+class MSFusion(nn.Module):
     def __init__(self, c1):
         super().__init__()
         self.pool = nn.AvgPool2d(2, 2)
@@ -126,18 +126,123 @@ class MSFusionV1(nn.Module):
         return patches[0] if patches else None
 
 
-class MSFusionV2(MSFusionV1):
+class MSFusionV1(MSFusion):
     def __init__(self, c1):
         super().__init__(c1)
         self.downsample = Conv(c1, c1, 3, 2)
 
     def forward(self, x):
         # 先对 patch 合并，再下采样；最后和原特征残差连接
-        split = torch.chunk(x, chunks=num_patches, dim=1)
+        split = torch.chunk(x, chunks=num_chunks, dim=1)
 
         reconstructed = self.reconstruct(split[1:])
 
         return split[0] + self.downsample(reconstructed)
+
+
+class MSFusionV3(MSFusion):
+    def __init__(self, c1):
+        super().__init__(c1)
+        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        self.downsample = Conv(c1, c1, 3, 2)
+
+    def forward(self, x):
+        # 先对 patch 合并，再下采样；最后和原特征残差连接
+        split = torch.chunk(x, chunks=num_chunks, dim=1)
+        large = self.upsample(split[0])
+
+        reconstructed = self.reconstruct(split[1:])
+
+        return self.downsample(large + reconstructed)
+
+
+class GatedFeatureFusion(nn.Module):
+    def __init__(self, c1):
+        super().__init__()
+        self.spatial_attention = SpatialAttention()
+        self.fusion_weight = nn.Parameter(torch.tensor(0.5))
+        self.weight_net = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(2 * c1, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, global_feat, local_feat):
+        sa = self.spatial_attention(global_feat)
+        att_local = local_feat * sa
+        alpha = self.weight_net(torch.concat([global_feat, att_local], dim=1))
+        alpha = alpha.view(-1, 1, 1, 1)
+        fused_feat = alpha * global_feat + (1 - alpha) * att_local
+
+        return fused_feat
+
+
+class MSFusionV4(MSFusion):
+    def __init__(self, c1):
+        super().__init__(c1)
+        self.spatial_attention = SpatialAttention()
+        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        self.fusion = GatedFeatureFusion(c1)
+        self.downsample = Conv(c1, c1, 3, 2)
+
+    def forward(self, x):
+        # 先对 patch 合并，再下采样；最后和原特征残差连接
+        split = torch.chunk(x, chunks=num_chunks, dim=1)
+        glo = self.upsample(split[0])
+        glo_att = self.spatial_attention(glo)
+        reconstructed = self.reconstruct(split[1:])
+        feature = self.fusion(glo_att, reconstructed)
+
+        return self.downsample(glo + feature)
+
+
+class ConvCrossFusion(nn.Module):
+    def __init__(self, c1):
+        super().__init__()
+        self.spatial_attn = SpatialAttention()
+        # 全局 → 局部 的“伪注意力”
+        self.global_proj = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(c1, c1, 1),
+            nn.Sigmoid()
+        )
+        self.local_conv = nn.Sequential(
+            nn.Conv2d(c1, c1, 3, padding=1, groups=c1),  # 深度卷积
+            nn.Conv2d(c1, c1, 1)
+        )
+
+    def forward(self, global_feat, local_feat):
+        sa = self.spatial_attn(global_feat)
+        local_feat = local_feat * sa
+
+        # 全局生成通道权重
+        weight = self.global_proj(global_feat)  # [B,C,1,1]
+        local_weighted = local_feat * weight
+
+        # 局部空间混合
+        out = self.local_conv(local_weighted)
+
+        return global_feat + out
+
+
+class MSFusionV5(MSFusionV1):
+    def __init__(self, c1):
+        super().__init__(c1)
+        self.spatial_attention = SpatialAttention()
+        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        self.fusion = ConvCrossFusion(c1)
+        self.downsample = Conv(c1, c1, 3, 2)
+
+    def forward(self, x):
+        # 先对 patch 合并，再下采样；最后和原特征残差连接
+        split = torch.chunk(x, chunks=num_chunks, dim=1)
+        glo = self.upsample(split[0])
+        # glo_att = self.spatial_attention(glo)
+        reconstructed = self.reconstruct(split[1:])
+        feature = self.fusion(glo, reconstructed)
+
+        return self.downsample(feature)
 
 
 def boundary_extractor(c1, dilation):

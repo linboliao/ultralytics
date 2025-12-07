@@ -9,11 +9,11 @@ model=yolo # yolo yoloe rtdetr yoloworld
 ckpt=tasks/cfg/models/msc_v1.yaml
 data=tasks/cfg/datasets/segment.yaml
 epoches=1000
-patience=100
+patience=300
 image_size=1024
-gpu_ids='0,2,3,4,5,6'
+gpu_ids='1,2,3,4,5,6'
 batch=24
-name=12n-msc-v1
+name=12n-msc-v1.4
 project=runs/segment/nc2
 python tasks/train.py --model $model --ckpt $ckpt --data $data --epoches $epoches --patience $patience --image_size $image_size --gpu_ids $gpu_ids --batch $batch --name $name --resume --project $project # --no_amp
-#echo --model $model --ckpt $ckpt --data $data --epoches $epoches --image_size $image_size --gpu_ids $gpu_ids --batch $batch --name $name --resume --no_amp --project $project
+#echo --model $model --ckpt $ckpt --data $data --epoches $epoches --image_size $image_size --gpu_ids $gpu_ids --batch $batch --name $name --resume --project $project # --no_amp

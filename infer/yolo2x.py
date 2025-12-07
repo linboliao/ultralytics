@@ -19,7 +19,7 @@ from tasks.wsi import WSIOperator
 from ultralytics import YOLO, YOLOE, RTDETR, YOLOWorld
 from ultralytics.engine.results import Boxes
 
-THRESHOLD = 0.5
+THRESHOLD = 0.2
 
 
 class YOLO2X:
@@ -125,16 +125,20 @@ class YOLO2GeoJsonDetect(YOLO2X):
                     conf_list = boxes.conf.cpu().tolist()
                     cls_list = boxes.cls.cpu().tolist()
                     for i in range(len(xyxy_list)):
-                        confidence = conf_list[i]
-                        if confidence < THRESHOLD and cls_list[i] == 1:
-                            continue
-
                         x1, y1, x2, y2 = xyxy_list[i]
 
                         x1 = x1 + coord[0]
                         y1 = y1 + coord[1]
                         x2 = x2 + coord[0]
                         y2 = y2 + coord[1]
+                        area = (x2 - x1) * (y2 - y1)
+                        confidence = conf_list[i]
+                        if confidence < 0.6 and area > 1024 * 1024 * 0.75 and abs((x2 - x1) - (y2 - y1)) < 150:
+                            continue
+                        if confidence < THRESHOLD and cls_list[i] == 1:
+                            continue
+                        if cls_list[i] != 1:
+                            continue
 
                         polygon_coordinates = [[[x1, y1], [x2, y1], [x2, y2], [x1, y2], [x1, y1]]]
                         label = self.labels[cls_list[i]]

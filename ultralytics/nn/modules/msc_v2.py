@@ -82,7 +82,7 @@ class MSC3k2(nn.Module):
         return torch.cat(parts, 1)
 
 
-class CustomA2C2f(nn.Module):
+class MSA2C2f(nn.Module):
     def __init__(self, c1: int, c2: int, n: int = 1, a2: bool = True, area: int = 1, residual: bool = False, mlp_ratio: float = 2.0, e: float = 0.5, g: int = 1, shortcut: bool = True):
         super().__init__()
         self.patch_block = A2C2f(c1, c2, n, a2, area, residual, mlp_ratio, e, g, shortcut)
