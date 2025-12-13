@@ -1,18 +1,11 @@
 # Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
 path:
 train:
-  - /NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/2048/train/images
-  - /NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/0424/train/images
+  - /NAS145/liaolinbo/Data/GlandSeg/maixin/dataset/train/images
 val:
-  - /NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/2048/train/images
-  - /NAS2/Data1/lbliao/Data/MXB/LabelMe/dataset/0424/val/images
+  - /NAS145/liaolinbo/Data/GlandSeg/maixin/dataset/val/images
 test:
-  - /NAS2/Data1/lbliao/Data/MXB/classification/第一批/dataset/2048/test/images
-  - /NAS2/Data1/lbliao/Data/MXB/classification/测试一/dataset/2048/test/images
-
-
-# Classes (80 COCO classes)
+  - /NAS145/liaolinbo/Data/GlandSeg/maixin/dataset/test/images
 names:
-    0: normal
-    1: cancer
-    2: vessel
+    0: Benign
+    1: Malignant

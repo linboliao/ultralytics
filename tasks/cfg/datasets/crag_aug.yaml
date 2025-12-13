@@ -1,0 +1,10 @@
+# Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
+path:
+train:
+  - /NAS145/liaolinbo/Data/GlandSeg/CRAG/dataset-aug/train/images
+val:
+  - /NAS145/liaolinbo/Data/GlandSeg/CRAG/dataset-aug/val/images
+test:
+  - /NAS145/liaolinbo/Data/GlandSeg/CRAG/dataset-aug/test/images
+names:
+    0: gland

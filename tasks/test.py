@@ -1,96 +1,42 @@
-import json
+import gc
 import os
-
-import torch
-import numpy as np
-import pandas as pd
+import json
 import argparse
+import shutil
 
-import monai
-from monai.metrics import DiceMetric, MeanIoU
-from monai.transforms import AsDiscrete, Activations
-from monai.data import decollate_batch
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import numpy as np
+import cv2
+import torch
 from PIL import Image, ImageDraw
+from pathlib import Path
 from loguru import logger
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-
-from ultralytics import YOLO, YOLOE, RTDETR, YOLOWorld
+import SimpleITK as sitk
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from ultralytics import YOLO, RTDETR, YOLOE, YOLOWorld
 from ultralytics.data.utils import check_det_dataset
-from ultralytics.utils.metrics import mask_iou
-import warnings
+from ultralytics.utils import ops
 
-warnings.filterwarnings("ignore")
+
+def collate_fn(batch):
+    image_paths = []
+
+    for image_path in batch:
+        image_paths.append(image_path)
+
+    return image_paths
 
 
 class ImageDataset(Dataset):
-    def __init__(self, images_dir, labels_dir, num_classes, transform=None):
-        """
-        初始化数据集
-        Args:
-            images_dir: 图像文件目录
-            labels_dir: 标签文件目录
-            num_classes: 类别数量
-            transform:
-        """
-        self.images_dir = images_dir
-        self.labels_dir = labels_dir
-        self.num_classes = num_classes
-        self.transform = transform if transform else transforms.ToTensor()
-
-        self.image_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-
-        print(f"找到 {len(self.image_files)} 个图像文件")
-
-        self.images, self.masks = self._preload_data()
-
-    def _preload_data(self):
-        """预加载所有图像和mask到内存"""
-        print("开始预加载数据到内存...")
-
-        images = [None] * len(self.image_files)
-        masks = [None] * len(self.image_files)
-
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            future_to_index = {executor.submit(self._load_single_item, idx): idx for idx in range(len(self.image_files))}
-
-            for future in tqdm(as_completed(future_to_index), total=len(self.image_files), desc="预加载进度"):
-                idx = future_to_index[future]
-                try:
-                    images[idx], masks[idx] = future.result()
-                except Exception as e:
-                    print(f"加载索引 {idx} 的数据时出错: {e}")
-
-        return images, masks
-
-    def _load_single_item(self, idx):
-        """加载单个数据项"""
-        img_name = self.image_files[idx]
-        img_base_name = os.path.splitext(img_name)[0]
-
-        img_path = os.path.join(self.images_dir, img_name)
-        image = Image.open(img_path).convert('RGB')
-        w, h = image.size
-
-        image = self.transform(image)
-
-        label_path = os.path.join(self.labels_dir, img_base_name + '.txt')
-        mask = yolo2mask(label_path, (h, w), self.num_classes)
-        mask = torch.from_numpy(mask).long()
-
-        return image, mask
+    def __init__(self, image_dir):
+        self.image_files = [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
 
     def __len__(self):
         return len(self.image_files)
 
     def __getitem__(self, idx):
-        """
-        根据索引获取图像和对应的mask
-        """
-        return self.images[idx], self.masks[idx]
+        return self.image_files[idx]
 
 
 def yolo2mask(label_path, img_size=(512, 512), num_classes=None):
@@ -129,147 +75,162 @@ def yolo2mask(label_path, img_size=(512, 512), num_classes=None):
     return mask
 
 
-def calculate_dice(pred_mask, true_mask, smooth=1e-10):
-    intersection = np.logical_and(pred_mask, true_mask).sum()
-    union = pred_mask.sum() + true_mask.sum()
-    return (2.0 * intersection + smooth) / (union + smooth)
+def save_masks(results, save_dir):
+    """
+    将每个类别的实例保存为单通道图像，像素值=类别ID+1
+    如果没有检测到实例，保存全为0的mask
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    for r in results:
+        h, w = r.orig_shape[:2]
+
+        class_mask = np.zeros((h, w), dtype=np.uint8)
+
+        if r.masks is not None and len(r.masks) > 0:
+            class_ids = r.boxes.cls.cpu().numpy()
+            masks = r.masks.data.cpu().numpy()
+
+            for mask, class_id in zip(masks, class_ids):
+                mask = mask.reshape(*mask.shape, 1)
+                mask = ops.scale_image(mask, r.orig_shape)
+                mask = np.squeeze(mask, axis=-1)
+                mask_binary = (mask > 0.5).astype(bool)
+                class_value = int(class_id) + 1
+                class_mask[mask_binary] = class_value
+
+        Image.fromarray(class_mask).save(f'{save_dir}/{Path(r.path).name}')
 
 
-def calculate_iou(pred_mask, true_mask, smooth=1e-10):
-    intersection = np.logical_and(pred_mask, true_mask).sum()
-    union = np.logical_or(pred_mask, true_mask).sum()
-    return (intersection + smooth) / (union + smooth)
+def calculate_hd95_sitk(mask_np, pred_np, voxel_spacing=(1.0, 1.0)):
+    if mask_np.max() == 0 and pred_np.max() == 0:
+        # 两个掩码都为空，返回距离 0
+        return 0.0
+
+    # 检查其中一个掩码是否为空
+    if mask_np.max() == 0 or pred_np.max() == 0:
+        # 其中一个掩码为空，返回一个很大的距离（如对角线长度）或跳过
+        # 这里返回图像对角线长度作为距离
+        h, w = mask_np.shape
+        return np.sqrt(h ** 2 + w ** 2)
+    mask_sitk = sitk.GetImageFromArray(mask_np.astype(np.uint8))
+    pred_sitk = sitk.GetImageFromArray(pred_np.astype(np.uint8))
+
+    mask_sitk.SetSpacing(voxel_spacing)
+    pred_sitk.SetSpacing(voxel_spacing)
+
+    hausdorff_filter = sitk.HausdorffDistanceImageFilter()
+    hausdorff_filter.Execute(mask_sitk, pred_sitk)
+
+    hd95 = hausdorff_filter.GetHausdorffDistance()
+
+    return hd95
 
 
-def multi_class_metrics(pred_mask, true_mask):
-    iou_scores = []
-    dice_scores = []
-    for c in range(pred_mask.shape[0]):
-        pred_bin = (pred_mask[c] > 0.5).astype(int)
-        true_bin = (true_mask[c] > 0.5).astype(int)
-        if np.sum(pred_bin) == 0 and np.sum(true_bin) == 0:
+def calc_one(mask_path, pred_path, classes=(1, 2)):
+    dice_l, iou_l, hd_l = [], [], []
+    m = cv2.imread(mask_path, 0)
+    if not os.path.exists(pred_path):
+        p = np.zeros_like(m)
+    else:
+        p = cv2.imread(pred_path, 0)
+
+    for c in classes:
+        mb = (m == c)
+        pb = (p == c)
+        if not mb.any() and not pb.any():
             continue
-        iou = calculate_iou(pred_bin, true_bin)
-        # iou = mask_iou(torch.from_numpy(pred_bin).reshape(1,-1), torch.from_numpy(true_bin).reshape(1,-1)).item()
-        dice = calculate_dice(pred_bin, true_bin)
-        if 0 < iou <= 1:
-            iou_scores.append(iou)
-            dice_scores.append(dice)
-    return {'dice': np.mean(dice_scores), 'iou': np.mean(iou_scores)}
+        inter = np.logical_and(mb, pb).sum()
+        sum_ab = mb.sum() + pb.sum()
+        union = np.logical_or(mb, pb).sum()
+        dice = 2 * inter / (sum_ab + 1e-8)
+        iou = inter / (union + 1e-8)
+
+        hd = calculate_hd95_sitk(mb, pb)
+        dice_l.append(dice)
+        iou_l.append(iou)
+        hd_l.append(hd)
+        del m, p, mb, pb
+
+    return (np.mean(dice_l) if dice_l else np.nan,
+            np.mean(iou_l) if iou_l else np.nan,
+            np.nanmean(hd_l) if hd_l else np.nan)
 
 
-def calculate(dataloader, model, args):
-    iou_scores = []
-    dice_scores = []
+def evaluate(mask_dir, pred_dir, classes=(1, 2), max_workers=None):
+    mask_dir, pred_dir = Path(mask_dir), Path(pred_dir)
+    IMG_EXTS = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff'}
 
-    for b_images, b_masks in tqdm(dataloader, desc="模型推理", unit="batch"):
-        results = model(b_images, verbose=False, device='4')
-        for result, label in zip(results, b_masks):
-            pred = np.zeros(label.shape, dtype=np.uint8)
-            if result.masks is not None:
-                pred_tensor = result.masks.data.cpu().numpy()
-                for i, mask in enumerate(pred_tensor):
-                    cls_id = int(result.boxes.cls[i].item())
-                    pred[cls_id] = np.logical_or(pred[cls_id], mask).astype(np.uint8)
-                label = label.numpy()
-                result_metrics = multi_class_metrics(pred, label)
-            # elif label.max() > 0:
-            #     result_metrics = {'dice': 0, 'iou': 0}
-            else:
-                continue
+    mask_files = [f for f in mask_dir.iterdir() if f.suffix.lower() in IMG_EXTS and f.is_file()]
+    tasks = [(m, pred_dir / m.name) for m in mask_files]
 
-            iou_scores.append(result_metrics.get('iou'))
-            dice_scores.append(result_metrics.get('dice'))
+    if max_workers is None:
+        max_workers = min(8, os.cpu_count() // 2)
 
-    iou_scores = pd.Series(iou_scores).dropna().tolist()
-    dice_scores = pd.Series(dice_scores).dropna().tolist()
-    return np.mean(dice_scores), np.mean(iou_scores)
+    results = {'dice': [], 'iou': [], 'hd95': []}
+    with ProcessPoolExecutor(max_workers=max_workers) as exe:
+        futures = [exe.submit(calc_one, m, p, classes) for m, p in tasks]
+        for fut in tqdm(as_completed(futures), total=len(futures), desc='评估', smoothing=0.1):
+            r = fut.result()
+            if r and not any(np.isnan(x) for x in r):
+                results['dice'].append(r[0])
+                results['iou'].append(r[1])
+                results['hd95'].append(r[2])
 
+            if len(results['dice']) % 50 == 0:
+                gc.collect()
 
-def calculate1(dataloader, model, include_background=True):
-    iou_scores = []
-    dice_scores = []
-    dice_metric = DiceMetric(include_background=include_background, reduction="mean", get_not_nans=False)
+    gc.collect()
 
-    iou_metric = MeanIoU(include_background=include_background, reduction="mean", get_not_nans=False)
-
-    for b_images, b_masks in tqdm(dataloader, desc="模型推理", unit="batch"):
-        results = model(b_images, verbose=False, device='4')
-        preds = []
-        masks = []
-        for result, label in zip(results, b_masks):
-            pred = np.zeros(label.shape, dtype=np.uint8)
-            if result.masks is not None:
-                pred_tensor = result.masks.data.cpu().numpy()
-                for i, mask in enumerate(pred_tensor):
-                    cls_id = int(result.boxes.cls[i].item())
-                    pred[cls_id] = np.logical_or(pred[cls_id], mask).astype(np.uint8)
-                label = label.numpy()
-                preds.append(pred)
-                masks.append(label)
-            else:
-                continue
-        if len(preds) == 0:
-            continue
-        pred = torch.tensor(preds)
-        mask = torch.tensor(masks)
-        dice_metric(y_pred=pred, y=mask)
-        iou_metric(y_pred=pred, y=mask)
-        dice_score = dice_metric.aggregate().item()
-        iou_score = iou_metric.aggregate().item()
-        dice_metric.reset()
-        iou_metric.reset()
-        iou_scores.append(iou_score)
-        dice_scores.append(dice_score)
-
-    iou_scores = pd.Series(iou_scores).dropna().tolist()
-    dice_scores = pd.Series(dice_scores).dropna().tolist()
-    return np.mean(dice_scores), np.mean(iou_scores)
+    return (
+        np.mean(results['dice']) if results['dice'] else np.nan,
+        np.mean(results['iou']) if results['iou'] else np.nan,
+        np.mean(results['hd95']) if results['hd95'] else np.nan
+    )
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, required=True, choices=['yolo', 'rtdetr', 'yoloe', 'yoloworld'], help='Model type to test: yolo, rtdetr, or yoloe')
-    parser.add_argument('--ckpt', type=str)
-    parser.add_argument('--data', type=str)
+    parser.add_argument('--model', choices=['yolo', 'rtdetr', 'yoloe', 'yoloworld'], required=True)
+    parser.add_argument('--ckpt', required=True)
+    parser.add_argument('--data', required=True)
+    parser.add_argument('--phase', type=str, default='val')
+    parser.add_argument('--name', type=str, default='exp')
     parser.add_argument('--batch', type=int, default=8)
-    parser.add_argument('--device', type=str)
-    parser.add_argument('--phase', type=str)
-    parser.add_argument('--name', type=str)
-    parser.add_argument('--project', type=str)
+    parser.add_argument('--project', type=str, default='runs/val')
+    parser.add_argument('--device', default='0')
     args = parser.parse_args()
 
-    if args.model == 'yolo':
-        model = YOLO(args.ckpt)
-    elif args.model == 'rtdetr':
-        model = RTDETR(args.ckpt)
-    elif args.model == 'yoloe':
-        model = YOLOE(args.ckpt)
-    elif args.model == 'yoloworld':
-        model = YOLOWorld(args.ckpt)
-    else:
-        raise ValueError(f"Unsupported model type: {args.model}")
+    ModelCls = dict(yolo=YOLO, rtdetr=RTDETR, yoloe=YOLOE, yoloworld=YOLOWorld)[args.model]
+    model = ModelCls(args.ckpt)
 
-    metrics = model.val(data=args.data, split=args.phase, name=args.name, batch=args.batch, project=args.project, device=args.device)
-    result = metrics.results_dict
-
-    data = check_det_dataset(args.data)
-    img_dirs = data.get(args.phase)
+    metrics = model.val(data=args.data, split=args.phase, batch=args.batch, device=args.device, name=args.name, project=args.project)
+    res_dict = metrics.results_dict
+    torch.cuda.empty_cache()
+    data_cfg = check_det_dataset(args.data)
+    img_dirs = data_cfg.get(args.phase)
     label_dirs = [d.replace('/images', '/labels') for d in img_dirs]
     mask_dirs = [d.replace('/images', '/masks') for d in img_dirs]
+    pred_dirs = [d.replace('/images', '/preds') for d in img_dirs]
+    dice_list, iou_list, hd_list = [], [], []
+    for img_dir, pred_dir, mask_dir in zip(img_dirs, pred_dirs, mask_dirs):
+        dataset = ImageDataset(img_dir)
+        dataloader = DataLoader(dataset, batch_size=args.batch, shuffle=False, num_workers=4, collate_fn=collate_fn)
+        os.makedirs(pred_dir, exist_ok=True)
+        for img_paths in tqdm(dataloader, desc="模型推理", unit="batch"):
+            results = model(img_paths, verbose=False, device=args.device)
+            save_masks(results, pred_dir)
 
-    dice_scores, iou_scores = [], []
-    for img_dir, label_dir in zip(img_dirs, label_dirs):
-        dataset = ImageDataset(img_dir, label_dir, 2)
-        dataloader = DataLoader(dataset, batch_size=args.batch, shuffle=False, num_workers=4)
-        dice, iou = calculate(dataloader, model, args)
-        dice_scores.append(dice)
-        iou_scores.append(iou)
-    logger.info(f"\n数据集平均dice: {np.mean(dice_scores):.4f}, 平均iou: {np.mean(iou_scores):.4f}")
-    result.update({'dice': np.mean(dice_scores), 'iou': np.mean(iou_scores)})
+        d, i, h = evaluate(mask_dir, pred_dir)
+        dice_list.append(d)
+        iou_list.append(i)
+        hd_list.append(h)
 
-    save_path = metrics.save_dir / 'metrics.json'
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    d, i, h = np.mean(dice_list), np.mean(iou_list), np.mean(hd_list)
+    logger.info(f'Dice: {d:.4f} | IoU: {i:.4f} | HD95: {h:.2f}')
 
-    with open(save_path, 'w', encoding='utf-8') as file:
-        json.dump(result, file, ensure_ascii=False, indent=4)
+    # 5. 合并结果并保存
+    res_dict.update(dice=d, iou=i, hd95=h)
+    save_path = Path(metrics.save_dir) / 'metrics.json'
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    json.dump(res_dict, save_path.open('w', encoding='utf-8'), indent=4, ensure_ascii=False)

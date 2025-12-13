@@ -10,7 +10,7 @@ from ultralytics.utils.plotting import plot_images
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data', type=str, required=True)
-parser.add_argument('--task', type=str, default='segment+', help='segment, detect')
+parser.add_argument('--task', type=str, default='segment', help='segment, detect')
 parser.add_argument('--imgsz', type=int, default=512)
 parser.add_argument('--phase', type=str, default='train')
 
@@ -28,7 +28,7 @@ if __name__ == "__main__":
     batch = 1
     for img_path in data[args.phase]:
         dataset = build_yolo_dataset(cfg, img_path, batch, data, mode=mode, rect=mode == "val")
-        dataloader = build_dataloader(dataset, batch=batch, workers=32)
+        dataloader = build_dataloader(dataset, batch=batch, workers=4)
         output_dir = img_path.replace("/images", f"/{args.task}_vis")
         os.makedirs(output_dir, exist_ok=True)
         bar = TQDM(dataloader, total=len(dataloader))

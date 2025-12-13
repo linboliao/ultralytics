@@ -7,13 +7,13 @@ export MKL_SERVICE_FORCE_INTEL=1
 
 model=yolo # yolo yoloe rtdetr yoloworld
 ckpt=tasks/cfg/models/msc_v1.yaml
-data=tasks/cfg/datasets/segment.yaml
+data=tasks/cfg/datasets/crag.yaml
 epoches=1000
-patience=300
+patience=100
 image_size=1024
-gpu_ids='1,2,3,4,5,6'
-batch=24
-name=12n-msc-v1.4
-project=runs/segment/nc2
-python tasks/train.py --model $model --ckpt $ckpt --data $data --epoches $epoches --patience $patience --image_size $image_size --gpu_ids $gpu_ids --batch $batch --name $name --resume --project $project # --no_amp
-#echo --model $model --ckpt $ckpt --data $data --epoches $epoches --image_size $image_size --gpu_ids $gpu_ids --batch $batch --name $name --resume --project $project # --no_amp
+gpu_ids='0,1,2,3,4,5'
+batch=6
+name=12m-msc-v3
+project=runs/crag
+#python tasks/train.py --model $model --ckpt $ckpt --data $data --epoches $epoches --patience $patience --image_size $image_size --gpu_ids $gpu_ids --batch $batch --name $name --resume --project $project # --no_amp
+echo --model $model --ckpt $ckpt --data $data --epoches $epoches --image_size $image_size --gpu_ids $gpu_ids --batch $batch --name $name --resume --project $project # --no_amp
