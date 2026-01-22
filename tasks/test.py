@@ -141,7 +141,7 @@ def calc_one(mask_path, pred_path, classes=(1, 2)):
         if not mb.any() and not pb.any():
             continue
         inter = np.logical_and(mb, pb).sum()
-        sum_ab = mb.sum() + pb.sum()
+        sum_ab = np.sum(mb) + np.sum(pb)
         union = np.logical_or(mb, pb).sum()
         dice = 2 * inter / (sum_ab + 1e-8)
         iou = inter / (union + 1e-8)
@@ -150,7 +150,7 @@ def calc_one(mask_path, pred_path, classes=(1, 2)):
         dice_l.append(dice)
         iou_l.append(iou)
         hd_l.append(hd)
-        del m, p, mb, pb
+    del m, p, mb, pb
 
     return (np.mean(dice_l) if dice_l else np.nan,
             np.mean(iou_l) if iou_l else np.nan,

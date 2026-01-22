@@ -7,13 +7,10 @@ export MKL_SERVICE_FORCE_INTEL=1
 
 model=yolo
 ckpt=runs/mx/12n-msc-v3/weights/best.pt
-data=tasks/cfg/datasets/segment.yaml
+data=tasks/cfg/datasets/maixin.yaml
 phase='test'
 name=12n-msc-v3
-project=test_runs/mx
-#CUDA_VISIBLE_DEVICES=7 python tasks/test.py --model $model --ckpt $ckpt --data $data --phase $phase --name $name --project $project
-phase='val'
-CUDA_VISIBLE_DEVICES=7 python tasks/test.py --model $model --ckpt $ckpt --data $data --phase $phase --name $name --project $project
-phase='train'
-#CUDA_VISIBLE_DEVICES=7 python tasks/test.py --model $model --ckpt $ckpt --data $data --phase $phase --name $name --project $project
+
+project=test_runs/mx2
+CUDA_VISIBLE_DEVICES=0 python tasks/test.py --model $model --ckpt $ckpt --data $data --phase $phase --name $name --project $project --batch 8
 #echo --model $model --ckpt $ckpt --data $data --phase $phase --name $name --project $project

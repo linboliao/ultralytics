@@ -4,7 +4,6 @@ train:
   - /NAS145/liaolinbo/Data/GlandSeg/CRAG/dataset/train/images
 val:
   - /NAS145/liaolinbo/Data/GlandSeg/CRAG/dataset/test/images
-#  - /NAS145/liaolinbo/Data/GlandSeg/CRAG/dataset/val/images
 test:
   - /NAS145/liaolinbo/Data/GlandSeg/CRAG/dataset/test/images
 names:

@@ -305,9 +305,9 @@ class MSFusionV1(nn.Module):
     def __init__(self, c1):
         super().__init__()
         self.downsample = Conv(c1, c1, 3, 2)
-        self.channel_attention = ChannelAttention(c1)
+        # self.channel_attention = ChannelAttention(c1)
         self.spatial_attention = DynamicSpatialAttention(c1, 3)
-        self.region_selector = SoftTopKRegionSelection(topk_ratio=0.3)
+        # self.region_selector = SoftTopKRegionSelection(topk_ratio=0.3)
         self.feature_fusion = GatedFeatureFusion(c1, c1)
         self.grid_size = int(math.sqrt(num_patches))
 

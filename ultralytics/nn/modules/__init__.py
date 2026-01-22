@@ -111,6 +111,7 @@ from .msc_v3 import (
     CustomSegment,
 )
 from .PKI import C2f_PKIBlock, C3k2PKI
+from .FCB import FCB
 
 __all__ = (
     "Conv",
@@ -198,4 +199,5 @@ __all__ = (
     "MSFusionV1",
     "BoundaryAttention",
     "CustomSegment",
+    "FCB",
 )
