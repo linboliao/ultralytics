@@ -1,28 +1,23 @@
 import argparse
 import json
 import os
+import stat
 import shutil
 import subprocess
 import time
 import traceback
 import concurrent.futures
 import pandas as pd
+import openslide
 from typing import Dict, List, Any, Optional
+from collections import defaultdict
 
-# conda_path = 'C:/Users/MXZY-AI/.conda/envs'
-#
-# work_dir = {
-#     'prepath': r'D:\Users\MXZY-AI\PycharmProjects\PrePATH',
-#     'ultralytics': r'D:\Users\MXZY-AI\PycharmProjects\ultralytics',
-#     'mil': r'D:\Users\MXZY-AI\PycharmProjects\MIL_BASELINE'
-# }
-
-conda_path = '/home/lbliao/anaconda3/envs'
+conda_path = r'C:\Users\MXZY-AI\.conda\envs'
 
 work_dir = {
-    'prepath': r'/data2/lbliao/Code/PrePATH',
-    'ultralytics': r'/NAS2/Data1/lbliao/Code/ultralytics',
-    'mil': r'/data2/lbliao/Code/MIL_BASELINE'
+    'prepath': r'D:\Users\MXZY-AI\PycharmProjects\PrePATH',
+    'ultralytics': r'D:\Users\MXZY-AI\PycharmProjects\ultralytics',
+    'mil': r'D:\Users\MXZY-AI\PycharmProjects\MIL_BASELINE'
 }
 
 
@@ -32,7 +27,7 @@ def run_command(p, command, task_name):
         print(f'开始执行{task_name}任务')
         env = os.environ.copy()
         env["PYTHONPATH"] = f"{p}"
-        env['LD_LIBRARY_PATH'] = '/home/lbliao/anaconda3/envs/ultralytics/lib'
+        print(command)
         result = subprocess.run(
             command,
             cwd=p,
@@ -41,14 +36,13 @@ def run_command(p, command, task_name):
             text=True,
             encoding="utf-8",
             capture_output=True,
-            timeout=3600  # 1小时超时
+            timeout=720000
         )
         print(f"✅ [{task_name}] 执行成功")
-        print(f"输出摘要: {result.stdout[:20]}...")
+        print(f"输出摘要: {result.stdout[:100]}...")
         return True
     except subprocess.CalledProcessError as e:
         print(f"❌ [{task_name}] 执行失败 (code={e.returncode})\n错误信息: {e.stderr}")
-
         traceback.print_exc()
         return False
     except subprocess.TimeoutExpired:
@@ -61,16 +55,21 @@ def run_command(p, command, task_name):
         return False
 
 
-def generate_csv_files(csv_dir, coord_dir, wsi_dir, num):
+def generate_cls_csv(csv_dir, coord_dir, wsi_dir, num):
     """生成CSV分割文件（含两列：case_id 和 slide_id），均匀分成num份"""
     csv_path = os.path.join(csv_dir, 'csv')
     os.makedirs(csv_path, exist_ok=True)
-
-    # 获取存在的base_names
-    base_names = [
-        os.path.splitext(slide)[0] for slide in os.listdir(wsi_dir)
-        if os.path.exists(os.path.join(coord_dir, 'patches', f'{os.path.splitext(slide)[0]}.h5'))
-    ]
+    slides = []
+    for root, dirs, files in os.walk(wsi_dir):
+        for file in files:
+            if file.endswith('.svs'):
+                slides.append(file)
+    base_names = []
+    for slide in slides:
+        base = os.path.splitext(slide)[0]
+        h5_path = os.path.join(coord_dir, 'patches', f'{base}.h5')
+        if os.path.exists(h5_path) and os.path.getsize(h5_path) > 0:
+            base_names.append(base)
 
     df = pd.DataFrame({"case_id": base_names, "slide_id": base_names})
     total_rows = len(df)
@@ -95,126 +94,205 @@ def generate_csv_files(csv_dir, coord_dir, wsi_dir, num):
     return csv_files
 
 
+def get_patch_csv(args):
+    wsi_format = {'svs', 'ndpi', 'tif', 'tiff', 'mrxs'}
+    output_40 = os.path.join(args.coord_dir, "40x_slides.csv")
+    output_20 = os.path.join(args.coord_dir, "20x_slides.csv")
+    output_10 = os.path.join(args.coord_dir, "10x_slides.csv")
+
+    slides_40 = []
+    slides_20 = []
+    slides_10 = []
+
+    for root, dirs, filenames in os.walk(args.wsi_dir):
+        for filename in filenames:
+            postfix = filename.split(".")[-1].lower()
+            if postfix in wsi_format:
+                slide_path = os.path.join(root, filename)
+                try:
+                    with openslide.OpenSlide(slide_path) as wsi:
+                        objective = wsi.properties.get('openslide.objective-power', '20')
+                        objective_int = int(objective)
+                        if objective_int == 40:
+                            slides_40.append(slide_path)
+                        elif objective_int == 20:
+                            slides_20.append(slide_path)
+                        elif objective_int == 10:
+                            slides_10.append(slide_path)
+                except Exception as e:
+                    print(f"处理文件 {slide_path} 时出错: {e}")
+                    continue
+
+    pd.DataFrame({'slide_path': slides_40}).to_csv(output_40, index=False, encoding='utf-8')
+    pd.DataFrame({'slide_path': slides_20}).to_csv(output_20, index=False, encoding='utf-8')
+    pd.DataFrame({'slide_path': slides_10}).to_csv(output_10, index=False, encoding='utf-8')
+
+    return (output_40, output_20, output_10), ('896', '448', '224')
+
+
+def create_patch_cls(args):
+    path = work_dir.get('prepath')
+    coord_dir = os.path.join(args.output_dir, 'patches_cls')
+    os.makedirs(coord_dir, exist_ok=True)
+    args.coord_dir = coord_dir
+    csvs, patch_sizes = get_patch_csv(args)
+    for csv, patch_size in zip(csvs, patch_sizes):
+        patch_cmd = [
+            os.path.join(conda_path, "clam/python.exe"),
+            os.path.join(path, 'create_patches_fp.py'),
+            "--source", args.wsi_dir,
+            "--csv_path", csv,
+            "--save_dir", coord_dir,
+            "--preset", "maixin.csv",
+            "--patch_level", '0',
+            "--patch_size", patch_size,
+            "--step_size", patch_size,
+            "--wsi_format", 'svs',
+            "--seg", "--patch", "--stitch", "--use_mp"
+        ]
+        if not run_command(path, patch_cmd, f"WSI生成 0 {patch_size} coords"):
+            return False
+
+
 def extract_features(csv_path, path, args, conda_path, coord_dir):
     """处理单个CSV文件的函数，用于并行执行"""
-    feat_dir = os.path.join(args.output_dir, 'feat_1_224')
+    feat_dir = os.path.join(args.output_dir, 'feat_cls')
     task_name = f"WSI特征提取_{os.path.basename(csv_path)}"
+    print(csv_path)
 
+    scr = 'extract_features_fp_stains.py' if args.normal else 'extract_features_fp_fast.py'
     feat_cmd = [
-        f"{conda_path}/clam/bin/python",
-        os.path.join(path, 'extract_features_fp_fast.py'),
+        os.path.join(conda_path, "clam/python.exe"),
+        os.path.join(path, scr),
         "--data_coors_dir", coord_dir,
         "--data_slide_dir", args.wsi_dir,
-        "--slide_ext", '.svs;.kfb',
+        "--slide_ext", '.svs',
         "--csv_path", csv_path,
-        "--feat_dir", feat_dir,
-        "--batch_size", '32',
+        "--feat_dir", feat_dir.replace('\\', '/'),
+        "--batch_size", '48',
         "--model", args.model,
     ]
 
     return run_command(path, feat_cmd, task_name)
 
 
-def run_wsi_task(args):
-    """WSI处理流水线（补丁生成+特征提取）"""
-    path = work_dir.get('prepath')
-    coord_dir = os.path.join(args.output_dir, 'patches_1_224')
-    patch_cmd = [
-        f"{conda_path}/clam/bin/python",
-        os.path.join(path, 'create_patches_fp.py'),
-        "--source", args.wsi_dir,
-        "--save_dir", coord_dir,
-        "--preset", "maixin.csv",
-        "--patch_level", '0',
-        "--patch_size", '224',
-        "--step_size", '224',
-        "--wsi_format", 'svs;kfb',
-        "--seg", "--patch", "--stitch", "--use_mp"
-    ]
-    if not run_command(path, patch_cmd, "WSI生成coords"):
-        return False
+def extract_features_parallel(args):
+    prepath = work_dir.get('prepath')
+    coord_dir = os.path.join(args.output_dir, 'patches_cls')
 
-    csv_paths = generate_csv_files(args.output_dir, coord_dir, args.wsi_dir, 2)
+    csv_paths = generate_cls_csv(args.output_dir, coord_dir, args.wsi_dir, 2)
+    csv_paths = [p for p in csv_paths if os.path.exists(p)]
+    if not csv_paths: return False
+
     with concurrent.futures.ProcessPoolExecutor(max_workers=2) as executor:
-        future_to_csv = {
-            executor.submit(extract_features, csv_path, path, args, conda_path, coord_dir): csv_path
-            for csv_path in csv_paths
-        }
-
-        results = []
+        future_to_csv = {executor.submit(extract_features, p, prepath, args, conda_path, coord_dir): p for p in
+                         csv_paths}
         for future in concurrent.futures.as_completed(future_to_csv):
             try:
-                result = future.result()
-                results.append(result)
+                future.result()
             except Exception as e:
-                print(f"任务处理异常: {e}")
+                print(f"处理失败: {future_to_csv[future]}, 错误: {e}")
                 return False
     return True
 
 
-def run_yolo(args):
-    """YOLO目标检测任务"""
+def generate_yolo_csv(csv_path, output_dir, num_parts=2):
+    csv_output_dir = os.path.join(output_dir, 'csv/yolo')
+    os.makedirs(csv_output_dir, exist_ok=True)
+
+    df = pd.read_csv(csv_path, dtype={'slide_id': str})
+
+    if 'prediction' not in df.columns:
+        raise ValueError(f"CSV文件 {csv_path} 中未找到'prediction'列")
+
+    filtered_df = df[df['prediction'] == 1].copy()
+    total_rows = len(filtered_df)
+
+    if total_rows == 0:
+        print("未找到prediction=1的行，无需分割")
+        return []
+
+    part_size = total_rows // num_parts
+    remainder = total_rows % num_parts
+
+    csv_files = []
+    start_index = 0
+
+    for i in range(num_parts):
+        current_part_size = part_size + (1 if i < remainder else 0)
+        end_index = start_index + current_part_size
+
+        part_df = filtered_df.iloc[start_index:end_index]
+        part_csv_path = os.path.join(csv_output_dir, f'part_{i}.csv')
+        part_df.to_csv(part_csv_path, index=False)
+
+        csv_files.append(part_csv_path)
+        start_index = end_index
+
+    return csv_files
+
+
+def create_patch_yolo(args):
     path = work_dir.get('prepath')
-    coord_dir = os.path.join(args.output_dir, f'patches_0_1024')
+    coord_dir = os.path.join(args.output_dir, 'patches_yolo')
     patch_cmd = [
-        f"{conda_path}/clam/bin/python",
+        os.path.join(conda_path, "clam/python.exe"),
         os.path.join(path, 'create_patches_fp.py'),
         "--source", args.wsi_dir,
         "--save_dir", coord_dir,
         "--preset", "maixin.csv",
         "--patch_level", '0',
-        "--patch_size", '1024',
-        "--step_size", '1024',
-        "--wsi_format", 'svs;kfb',
+        "--patch_size", '2048',
+        "--step_size", '2048',
+        "--wsi_format", 'svs',
         "--seg", "--patch", "--stitch", "--use_mp"
     ]
-    if not run_command(path, patch_cmd, "WSI生成coords"):
+    if not run_command(path, patch_cmd, "WSI生成 0 2048 coords"):
         return False
+
+
+def run_yolo(args, csv_file):
     path = work_dir.get('ultralytics')
+    coord_dir = os.path.join(args.output_dir, 'patches_yolo')
     yolo_cmd = [
-        f"{conda_path}/ultralytics/bin/python",
+        os.path.join(conda_path, "ultralytics/python.exe"),
         os.path.join(path, 'infer/yolo2x.py'),
         "--model", 'yolo',
         "--task", 'detect',
         "--data_coors_dir", coord_dir,
         "--data_slide_dir", args.wsi_dir,
-        "--ckpts", 'runs/detect/yolo11s_0512/weights/best.pt;runs/detect/yolo11s_0702/weights/best.pt;runs/detect/cbam/weights/best.pt;runs/detect/pki/weights/best.pt',
-        "--slide_ext", '.kfb;.svs',
-        "--batch_size", '16',
+        "--csv_path", csv_file,
+        "--ckpts",
+        'runs/detect/yolo11s_0512/weights/best.pt;runs/detect/yolo11s_0702/weights/best.pt;runs/detect/cbam/weights/best.pt;runs/detect/pki/weights/best.pt',
+        "--slide_ext", '.svs',
+        "--batch_size", '2',
         "--output_dir", os.path.join(args.output_dir, 'yolo'),
     ]
-    if not run_command(path, yolo_cmd, "YOLO检测"):
-        return False
-    path = work_dir.get('ultralytics')
-    yolo_cmd = [
-        f"{conda_path}/ultralytics/bin/python",
-        os.path.join(path, 'infer/yolo2x.py'),
-        "--model", 'yolo',
-        "--task", 'segment',
-        "--data_coors_dir", coord_dir,
-        "--data_slide_dir", args.wsi_dir,
-        "--ckpts", 'runs/segment/yolo12s/weights/best.pt',
-        "--slide_ext", '.kfb;.svs',
-        "--batch_size", '32',
-        "--output_dir", os.path.join(args.output_dir, 'yolo'),
-    ]
-    if not run_command(path, yolo_cmd, "YOLO分割"):
-        return False
-    path = work_dir.get('ultralytics')
-    yolo_cmd = [
-        f"{conda_path}/ultralytics/bin/python",
-        os.path.join(path, 'infer/merger.py'),
-        "--input_dir", os.path.join(args.output_dir, 'yolo'),
-        "--output_dir", os.path.join(args.output_dir, 'yolo'),
-    ]
-    return run_command(path, yolo_cmd, "合并")
+    return run_command(path, yolo_cmd, f"YOLO检测（{os.path.basename(csv_file)}）")
+
+
+def run_yolo_parallel(args):
+    """YOLO目标检测任务"""
+    csvs = generate_yolo_csv(args.csv_path, args.output_dir, num_parts=3)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(run_yolo, args, csv) for csv in csvs]
+        for future in futures:
+            try:
+                future.result()
+            except Exception as e:
+                return False
+    return True
 
 
 def gen_test_csv(args):
     test_csv = os.path.join(args.output_dir, 'test.csv')
-    feat_dir = os.path.join(args.output_dir, f'feat_1_224/pt_files/{args.model}')
-    feat_files = [entry.path for entry in os.scandir(feat_dir)]
-    # feat_files = [os.path.join(feat_dir, f) for f in os.listdir(feat_dir)]
+    if os.path.exists(test_csv):
+        os.remove(test_csv)
+    feat_dir = os.path.join(args.output_dir, f'feat_cls/pt_files/{args.model}')
+    feat_files = [
+        entry.path for entry in os.scandir(feat_dir)
+        if entry.is_file() and os.path.getsize(entry.path) > 0
+    ]
     df = pd.DataFrame({
         "test_slide_path": feat_files,
         "test_label": [0 for _ in range(len(feat_files))],
@@ -223,20 +301,111 @@ def gen_test_csv(args):
     return test_csv
 
 
+def merge_predictions_by_voting(output_dir, model_indices=[0, 1, 2, 3, 4]):
+    slide_predictions = defaultdict(list)
+
+    for idx in model_indices:
+        result_dir = os.path.join(output_dir, f'cancer/{idx}')
+        result_file = os.path.join(result_dir, 'Infer_Result_CLAM_MB_MIL.csv')
+
+        if not os.path.exists(result_file):
+            raise FileNotFoundError(f"模型{idx}的结果文件不存在: {result_file}")
+
+        df = pd.read_csv(result_file, dtype={'slide_id': str})
+
+        required_cols = ['slide_id', 'prediction']
+        if not set(required_cols).issubset(df.columns):
+            raise ValueError(f"结果文件{result_file}缺少必要列，需要: {required_cols}")
+
+        for _, row in df.iterrows():
+            slide_id = row['slide_id']
+            prediction = row['prediction']
+            slide_predictions[slide_id].append(int(prediction))
+
+    merged_results = []
+    for slide_id, preds in slide_predictions.items():
+        count_0 = preds.count(0)
+        count_1 = preds.count(1)
+
+        final_pred = 1 if count_1 >= count_0 else 0
+        merged_results.append({
+            'slide_id': slide_id,
+            'prediction': final_pred,
+            'votes_0': count_0,  # 可选：保留票数统计
+            'votes_1': count_1
+        })
+
+    merged_df = pd.DataFrame(merged_results)
+    merged_df = merged_df[['slide_id', 'prediction', 'votes_0', 'votes_1']]  # 调整列顺序
+    merged_df = merged_df.sort_values(by='slide_id').reset_index(drop=True)
+
+    output_file = os.path.join(output_dir, 'cancer', 'merged_voting_result.csv')
+    merged_df.to_csv(output_file, index=False)
+    print(f"投票合并结果已保存至: {output_file}")
+
+    return merged_df
+
+
 def run_cls(args):
     path = work_dir.get('mil')
-
-    cancer_dir = os.path.join(args.output_dir, 'cancer')
-
+    cancer_dir = os.path.join(args.output_dir, 'cancer/0')
+    ckpt = '10x-normal' if args.normal else '10x'
     test_cmd = [
-        os.path.join(conda_path, f'clam/bin/python'),
+        os.path.join(conda_path, f'clam/python.exe'),
         os.path.join(path, 'infer_mil.py'),
-        "--yaml_path", os.path.join(path, f'configs/cancer/AB_MIL-{args.model}.yaml'),
+        "--yaml_path", os.path.join(path, f'configs/cancer/CLAM_MB_MIL-{args.model}.yaml'),
         "--test_dataset_csv", args.test_csv,
-        "--model_weight_path", os.path.join(path, 'ckpts/cancer/best.pth'),
+        "--model_weight_path", os.path.join(path, f'ckpts/cancer/{ckpt}/best_f1.pth'),
         "--test_log_dir", cancer_dir
     ]
-    return run_command(path, test_cmd, "癌症诊断")
+    if not run_command(path, test_cmd, "癌症诊断"):
+        return False
+    cancer_dir = os.path.join(args.output_dir, 'cancer/1')
+    test_cmd = [
+        os.path.join(conda_path, f'clam/python.exe'),
+        os.path.join(path, 'infer_mil.py'),
+        "--yaml_path", os.path.join(path, f'configs/cancer/CLAM_MB_MIL-{args.model}.yaml'),
+        "--test_dataset_csv", args.test_csv,
+        "--model_weight_path", os.path.join(path, f'ckpts/cancer/{ckpt}/best_f2.pth'),
+        "--test_log_dir", cancer_dir
+    ]
+    if not run_command(path, test_cmd, "癌症诊断"):
+        return False
+    cancer_dir = os.path.join(args.output_dir, 'cancer/2')
+    test_cmd = [
+        os.path.join(conda_path, f'clam/python.exe'),
+        os.path.join(path, 'infer_mil.py'),
+        "--yaml_path", os.path.join(path, f'configs/cancer/CLAM_MB_MIL-{args.model}.yaml'),
+        "--test_dataset_csv", args.test_csv,
+        "--model_weight_path", os.path.join(path, f'ckpts/cancer/{ckpt}/best_f3.pth'),
+        "--test_log_dir", cancer_dir
+    ]
+    if not run_command(path, test_cmd, "癌症诊断"):
+        return False
+    cancer_dir = os.path.join(args.output_dir, 'cancer/3')
+    test_cmd = [
+        os.path.join(conda_path, f'clam/python.exe'),
+        os.path.join(path, 'infer_mil.py'),
+        "--yaml_path", os.path.join(path, f'configs/cancer/CLAM_MB_MIL-{args.model}.yaml'),
+        "--test_dataset_csv", args.test_csv,
+        "--model_weight_path", os.path.join(path, f'ckpts/cancer/{ckpt}/best_f4.pth'),
+        "--test_log_dir", cancer_dir
+    ]
+    if not run_command(path, test_cmd, "癌症诊断"):
+        return False
+    cancer_dir = os.path.join(args.output_dir, 'cancer/4')
+    test_cmd = [
+        os.path.join(conda_path, f'clam/python.exe'),
+        os.path.join(path, 'infer_mil.py'),
+        "--yaml_path", os.path.join(path, f'configs/cancer/CLAM_MB_MIL-{args.model}.yaml'),
+        "--test_dataset_csv", args.test_csv,
+        "--model_weight_path", os.path.join(path, f'ckpts/cancer/{ckpt}/best_f5.pth'),
+        "--test_log_dir", cancer_dir
+    ]
+    if not run_command(path, test_cmd, "癌症诊断"):
+        return False
+    merge_predictions_by_voting(args.output_dir)
+    return True
 
 
 def run_isup(args):
@@ -245,7 +414,7 @@ def run_isup(args):
     isup_dir = os.path.join(args.output_dir, 'isup')
 
     test_cmd = [
-        os.path.join(conda_path, f'clam/bin/python'),
+        os.path.join(conda_path, f'clam/python.exe'),
         os.path.join(path, 'infer_mil.py'),
         "--yaml_path", os.path.join(path, f'configs/isup/CLAM_MB_MIL-{args.model}.yaml'),
         "--test_dataset_csv", args.test_csv,
@@ -261,7 +430,7 @@ def run_gleason(args):
     isup_dir = os.path.join(args.output_dir, 'gleason')
 
     test_cmd = [
-        os.path.join(conda_path, f'clam/bin/python'),
+        os.path.join(conda_path, f'clam/python.exe'),
         os.path.join(path, 'infer_mil.py'),
         "--yaml_path", os.path.join(path, f'configs/gleason/CLAM_MB_MIL-{args.model}.yaml'),
         "--test_dataset_csv", args.test_csv,
@@ -318,30 +487,8 @@ def execute_phase_parallel(tasks, task_names, args, max_workers=2):
     return results
 
 
-def run_medical_image_pipeline(
-        # 路径配置参数
-        wsi_dir: str,
-        output_dir: str,
-        slide_list=None,
-
-        patch_level: int = 0,
-        wsi_format: str = "svs;kfb",
-        model: str = "h-optimus-1",
-) -> Dict[str, Any]:
-    """
-    执行医学图像处理流水线
-
-    Args:
-        wsi_dir: WSI图像目录，默认为第一批数据路径
-        slide_list: slide列表，使用分号分隔的字符串
-        output_dir: 合并结果输出目录
-        patch_level: 提取层级，默认为0
-        wsi_format: slide格式，默认为'svs;kfb'
-        model: 基础模型，默认为'h-optimus-1'
-
-    Returns:
-        包含执行结果和统计信息的字典
-    """
+def run_medical_image_pipeline(wsi_dir: str, output_dir: str, slide_list=None, patch_level: int = 0,
+                               wsi_format: str = "svs", model: str = "h-optimus-1", normal=False) -> Dict[str, Any]:
     args = argparse.Namespace()
     args.wsi_dir = wsi_dir
     args.slide_list = slide_list
@@ -349,6 +496,7 @@ def run_medical_image_pipeline(
     args.patch_level = patch_level
     args.wsi_format = wsi_format
     args.model = model
+    args.normal = normal
 
     if slide_list:
         slide_list_items = slide_list.split(';')
@@ -361,48 +509,27 @@ def run_medical_image_pipeline(
     all_results = {}
     execution_stats = {}
     st = time.time()
-
     try:
-        # 阶段1：并行执行 run_wsi_task 和 run_yolo
-        phase1_tasks = [run_wsi_task, run_yolo]
-        phase1_names = ["特征提取", "YOLO检测"]
+        create_patch_cls(args)
+        extract_features_parallel(args)
 
-        phase1_results = execute_phase_parallel(
-            phase1_tasks, phase1_names, args, max_workers=2,
-        )
+        args.test_csv = gen_test_csv(args)
+
+        st_phase1 = time.time()
+        phase1_tasks = [run_cls, run_gleason, create_patch_yolo]
+        phase1_names = ["癌症诊断", "Gleason诊断", "yolo patching"]
+
+        phase1_results = execute_phase_parallel(phase1_tasks, phase1_names, args, max_workers=3)
         all_results.update(phase1_results)
 
-        phase1_time = time.time() - st
+        phase1_time = time.time() - st_phase1
         execution_stats["phase1_time"] = phase1_time
         print(f"⏱️ 阶段1执行时间: {phase1_time:.2f}秒")
-
-        # 生成测试CSV
-        st_csv = time.time()
-        args.test_csv = gen_test_csv(args)
-        csv_gen_time = time.time() - st_csv
-        execution_stats["csv_gen_time"] = csv_gen_time
-        print(f"⏱️ CSV生成时间: {csv_gen_time:.2f}秒")
-
-        # 阶段2：并行执行 run_cls, run_isup, run_gleason
-        st_phase2 = time.time()
-        phase2_tasks = [run_cls, run_isup, run_gleason]
-        phase2_names = ["癌症诊断", "ISUP诊断", "Gleason诊断"]
-
-        phase2_results = execute_phase_parallel(
-            phase2_tasks, phase2_names, args, max_workers=3,
-        )
-        all_results.update(phase2_results)
-
-        phase2_time = time.time() - st_phase2
-        execution_stats["phase2_time"] = phase2_time
-        print(f"⏱️ 阶段2执行时间: {phase2_time:.2f}秒")
-
-        # 总执行时间
-        total_time = phase1_time + csv_gen_time + phase2_time
-        execution_stats["total_time"] = total_time
+        args.csv_path = os.path.join(args.output_dir, 'cancer/merged_voting_result.csv')
+        run_yolo_parallel(args)
+        total_time = time.time() - st
         print(f"⏱️ 总执行时间: {total_time:.2f}秒")
 
-        # 生成结果文件
         if all_results.get("癌症诊断", True):
             _generate_result_files(output_dir)
 
@@ -425,49 +552,53 @@ def run_medical_image_pipeline(
 def _generate_result_files(output_dir: str) -> None:
     """生成最终的结果文件"""
     result_json = os.path.join(output_dir, 'exist_cancer.json')
-    cancer_csv = os.path.join(output_dir, 'cancer/Infer_Result_AB_MIL.csv')
+    cancer_csv = os.path.join(output_dir, 'cancer/merged_voting_result.csv')
     tissue_csv = os.path.join(output_dir, 'yolo/area.csv')
     gleason_csv = os.path.join(output_dir, 'gleason/Infer_Result_CLAM_MB_MIL.csv')
-    isup_csv = os.path.join(output_dir, 'isup/Infer_Result_CLAM_MB_MIL.csv')
+    # isup_csv = os.path.join(output_dir, 'isup/Infer_Result_CLAM_MB_MIL.csv')
 
     results = []
 
-    # 读取各阶段结果CSV文件
     cancer_df = pd.read_csv(cancer_csv, dtype={'slide_id': str})
     tissue_df = pd.read_csv(tissue_csv, dtype={'slide_id': str})
     gleason_df = pd.read_csv(gleason_csv, dtype={'slide_id': str})
-    isup_df = pd.read_csv(isup_csv, dtype={'slide_id': str})
-
-    # 处理每个slide的结果
-    for slide_id, pred in zip(cancer_df['slide_id'], cancer_df['prediction']):
-        if pred == 1:
-            tissue = tissue_df[tissue_df['slide_id'].astype(str) == str(slide_id)]
-            gleason = gleason_df[gleason_df['slide_id'].astype(str) == str(slide_id)]
-            # isup = isup_df[isup_df['slide_id'].astype(str) == str(slide_id)]
-
-            tissue_area = tissue['area'].iloc[0] if not tissue.empty else "N/A"
-            gleason_grade = grade_mapping[gleason['prediction'].iloc[0]] if not gleason.empty else 'N/A'
-            # isup_grade = isup_mapping[isup['prediction'].iloc[0]] if not isup.empty else 'N/A'
-            isup_grade = isup_mapping[gleason_grade] if gleason_grade != 'N/A' else "N/A"
-
-            result = {
-                "filename": f'{slide_id}.geojson',
-                "percentage": tissue_area,
-                "Gleason": f"{gleason_grade};ISUP: {isup_grade}"
-            }
-            results.append(result)
+    # isup_df = pd.read_csv(isup_csv, dtype={'slide_id': str})
     import geopandas as gpd
-    for file in os.listdir(os.path.join(output_dir, 'yolo')):
-        if file.endswith(".geojson"):
-            file_path = os.path.join(output_dir, 'yolo', file)
-
+    for slide_id, pred, votes_0 in zip(cancer_df['slide_id'], cancer_df['prediction'], cancer_df['votes_0']):
+        file_path = os.path.join(output_dir, 'yolo', f'{slide_id}-detect.geojson')
+        num = 0
+        if os.path.exists(file_path):
             gdf = gpd.read_file(file_path)
             gdf = gdf[
                 gdf['classification'].apply(
-                    lambda x: json.loads(x.replace("'", '"')).get('name') == 'cancer'
+                    lambda x: json.loads(x.replace("'", '"')).get('name') == 'Malignant'
                 )
             ]
-            gdf.to_file(os.path.join(output_dir, file.replace('-segment', '')))
+            gdf.to_file(os.path.join(output_dir, f'{slide_id}.geojson'))
+            num = len(gdf)
+        if pred == 0 or num == 0:
+            typ = 'Benign'
+        else:
+            typ = 'Malignant'
+
+        conf = 'weak' if votes_0 in [2, 3] else 'strong'
+        tissue = tissue_df[tissue_df['slide_id'].astype(str) == str(slide_id)]
+        gleason = gleason_df[gleason_df['slide_id'].astype(str) == str(slide_id)]
+        # isup = isup_df[isup_df['slide_id'].astype(str) == str(slide_id)]
+
+        tissue_area = tissue['area'].iloc[0] if not tissue.empty else "N/A"
+        gleason_grade = grade_mapping[gleason['prediction'].iloc[0]] if not gleason.empty else 'N/A'
+        isup_grade = isup_mapping[gleason_grade] if gleason_grade != 'N/A' else "N/A"
+
+        result = {
+            "filename": f'{slide_id}.geojson',
+            "type": typ,
+            "conf": conf,
+            "percentage": tissue_area,
+            "Gleason": f"{gleason_grade}",
+            "ISUP": f"{isup_grade}"
+        }
+        results.append(result)
 
     try:
         with open(result_json, 'r', encoding='utf-8') as f:
@@ -475,10 +606,18 @@ def _generate_result_files(output_dir: str) -> None:
     except FileNotFoundError:
         data = {"geojson_files": []}
 
-    # 添加新结果
-    data['geojson_files'].extend(results)
+    for new_result in results:
+        found = False
+        for i, existing_result in enumerate(data['geojson_files']):
+            if existing_result['filename'] == new_result['filename']:
+                # 更新已存在的记录
+                data['geojson_files'][i] = new_result
+                found = True
+                break
 
-    # 写入结果文件
+        if not found:
+            data['geojson_files'].append(new_result)
+
     with open(result_json, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -487,9 +626,9 @@ parser = argparse.ArgumentParser(description="医学图像处理流水线 v1.0")
 
 # 路径参数组
 path_group = parser.add_argument_group("路径配置")
-path_group.add_argument("--wsi_dir", type=str, help="WSI图像目录", default='/NAS2/Data1/lbliao/Data/MXB/segment/第一批/slides')
+path_group.add_argument("--wsi_dir", type=str, default=r"D:/MXZY-AI/UI_withAI[v1.1]/input", help="WSI图像目录")
 path_group.add_argument("--slide_list", type=str, help="slide 列表，使用;分隔")
-path_group.add_argument("--output_dir", help="合并结果输出目录", default='/NAS2/Data1/lbliao/Data/MXB/segment/第一批/result')
+path_group.add_argument("--output_dir", default=r"D:/MXZY-AI/UI_withAI[v1.1]/input/test", help="合并结果输出目录")
 
 # WSI参数组
 wsi_group = parser.add_argument_group("WSI处理参数")
@@ -497,91 +636,59 @@ wsi_group.add_argument("--patch_level", type=int, default=0, help="提取层级"
 wsi_group.add_argument("--wsi_format", default="svs;kfb", help="slide 格式，使用;分隔")
 wsi_group.add_argument("--model", default="h-optimus-1", help="基础模型")
 
+wsi_group.add_argument("--normal", type=bool, default=True, help="归一化")
+
+# 任务控制组
+control_group = parser.add_argument_group("任务控制")
+control_group.add_argument("-j", "--jobs", type=int, default=-1, help="并行任务数（-1=自动使用所有核心）")
+
+
+def handle_remove_readonly(func, path, exc_info):
+    """处理只读文件的删除回调"""
+    os.chmod(path, stat.S_IWRITE)  # 去除只读属性
+    func(path)
+
+
 if __name__ == "__main__":
-    args = parser.parse_args()
-    if args.slide_list:
-        slide_list = args.slide_list.split(';')
-        tmp_dir = os.path.join(args.output_dir, 'tmp')
-        os.makedirs(tmp_dir, exist_ok=True)
-        for slide in slide_list:
-            shutil.copy(os.path.join(args.wsi_dir, slide), tmp_dir)
-        args.wsi_dir = tmp_dir
+    try:
+        args = parser.parse_args()
+        print(args)
+        if args.slide_list:
+            slide_list_items = args.slide_list.split(';')
+            tmp_dir = os.path.join(args.output_dir, 'tmp')
+            os.makedirs(tmp_dir, exist_ok=True)
+            for slide in slide_list_items:
+                shutil.copy(os.path.join(args.wsi_dir, slide), tmp_dir)
+            args.wsi_dir = tmp_dir
 
-    all_results = {}
-    st = time.time()
+        all_results = {}
+        execution_stats = {}
+        st = time.time()
+        create_patch_cls(args)
+        extract_features_parallel(args)
 
-    # 阶段1：并行执行 run_wsi_task 和 run_yolo
-    phase1_tasks = [run_wsi_task, run_yolo]
-    phase1_names = ["特征提取", "YOLO检测"]
+        args.test_csv = gen_test_csv(args)
 
-    phase1_results = execute_phase_parallel(phase1_tasks, phase1_names, args, max_workers=2)
-    all_results.update(phase1_results)
+        st_phase1 = time.time()
+        phase1_tasks = [run_cls, run_gleason, create_patch_yolo]
+        phase1_names = ["癌症诊断", "Gleason诊断", "yolo patching"]
 
-    phase1_time = time.time() - st
-    print(f"⏱️ 阶段1执行时间: {phase1_time:.2f}秒")
+        phase1_results = execute_phase_parallel(phase1_tasks, phase1_names, args, max_workers=3)
+        all_results.update(phase1_results)
 
-    # 生成测试CSV（必须在阶段1完成后执行）
-    st = time.time()
-    args.test_csv = gen_test_csv(args)
-    csv_gen_time = time.time() - st
-    print(f"⏱️ CSV生成时间: {csv_gen_time:.2f}秒")
+        phase1_time = time.time() - st_phase1
+        execution_stats["phase1_time"] = phase1_time
+        print(f"⏱️ 阶段1执行时间: {phase1_time:.2f}秒")
+        cancer_csv = os.path.join(args.output_dir, 'cancer/merged_voting_result.csv')
+        args.csv_path = os.path.join(args.output_dir, 'cancer/merged_voting_result.csv')
+        run_yolo_parallel(args)
+        total_time = time.time() - st
+        print(f"⏱️ 总执行时间: {total_time:.2f}秒")
 
-    # 阶段2：并行执行 run_cls, run_isup, run_gleason
-    st = time.time()
-    phase2_tasks = [run_cls, run_isup, run_gleason]
-    phase2_names = ["癌症诊断", "ISUP诊断", "Gleason诊断"]
+        if all_results.get("癌症诊断", True):
+            _generate_result_files(args.output_dir)
 
-    phase2_results = execute_phase_parallel(phase2_tasks, phase2_names, args, max_workers=3)
-    all_results.update(phase2_results)
-
-    phase2_time = time.time() - st
-    print(f"⏱️ 阶段2执行时间: {phase2_time:.2f}秒")
-
-    # 总执行时间
-    total_time = phase1_time + csv_gen_time + phase2_time
-    print(f"⏱️ 总执行时间: {total_time:.2f}秒")
-
-    if all_results.get("癌症诊断", True) and all_results.get("癌症诊断", True) and all_results.get("癌症诊断", True):
-        result_json = os.path.join(args.output_dir, 'exist_cancer.json')
-        cancer_csv = os.path.join(args.output_dir, 'cancer/Infer_Result_AB_MIL.csv')
-        tissue_csv = os.path.join(args.output_dir, 'yolo/area.csv')
-        gleason_csv = os.path.join(args.output_dir, 'gleason/Infer_Result_CLAM_MB_MIL.csv')
-        isup_csv = os.path.join(args.output_dir, 'isup/Infer_Result_CLAM_MB_MIL.csv')
-
-        results = []
-
-        cancer_df = pd.read_csv(cancer_csv)
-        tissue_df = pd.read_csv(tissue_csv)
-        gleason_df = pd.read_csv(gleason_csv)
-        isup_df = pd.read_csv(isup_csv)
-
-        for slide_id, pred in zip(cancer_df['slide_id'], cancer_df['prediction']):
-            if pred == 0:
-                typ = 'Benign'
-            else:
-                typ = 'Malignant'
-
-            tissue = tissue_df[tissue_df['slide_id'].astype(str) == str(slide_id)]
-            gleason = gleason_df[gleason_df['slide_id'].astype(str) == str(slide_id)]
-            isup = isup_df[isup_df['slide_id'].astype(str) == str(slide_id)]
-            tissue = tissue['area'].iloc[0] if not tissue.empty else "N/A"
-            gleason = grade_mapping[gleason['prediction'].iloc[0]] if not gleason.empty else 'N/A'
-            isup = grade_mapping[isup['prediction'].iloc[0]] if not isup.empty else 'N/A'
-            result = {
-                "filename": f'{slide_id}.geojson',
-                "percentage": tissue,
-                "Gleason": f"{gleason}",
-                "ISUP": f"{isup}"
-            }
-            results.append(result)
-
-        try:
-            with open(result_json, 'r') as f:
-                data = json.load(f)
-        except FileNotFoundError:
-            data = {"geojson_files": []}
-
-        data['geojson_files'].extend(results)
-
-        with open(result_json, 'w') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+    finally:
+        pass
+        # shutil.rmtree(tmp_dir, onerror=handle_remove_readonly)
+        # print(f"\n已成功删除文件夹: {tmp_dir}")
