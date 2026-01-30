@@ -80,25 +80,36 @@ class GeoJSON2YOLO(X2YOLO):
         self.width = 0
         self.height = 0
 
+        # self.class_map = {
+        #     'prostate': 1,
+        #     'Negative': 1,
+        #     'non-cancer': 1,
+        #     'cancer': 2,
+        #     'Positive': 2,
+        #     'Tumor': 2,
+        #     'Region*': 2,
+        #     'lymphocyte': 3,
+        #     'vessel': 3,
+        #     'vessle': 3,
+        #     'nerve': 3,
+        #     '杂质': 3
+        # }
         self.class_map = {
-            'prostate': 1,
+            'non-cancer':1,
+            'prostate':1,
             'Negative': 1,
-            'non-cancer': 1,
-            'cancer': 2,
-            'Positive': 2,
-            'Tumor': 2,
-            'Region*': 2,
-            'lymphocyte': 3,
-            'vessel': 3,
-            'vessle': 3,
-            'nerve': 3,
-            '杂质': 3
+            '3': 2,
+            'gleason 3':2,
+            '4': 3,
+            'gleason 4': 3,
+            '5':4
         }
+
 
         self.color_map = {
             (0, 255, 0): 1,
-            (255, 0, 0): 2,
-            (255, 255, 0): 3,
+            # (255, 0, 0): 2,
+            # (255, 255, 0): 3,
         }
 
     def load_wsi(self, slide_path: str) -> None:

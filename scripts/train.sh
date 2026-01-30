@@ -6,14 +6,15 @@ export MKL_THREADING_LAYER=GNU
 export MKL_SERVICE_FORCE_INTEL=1
 
 model=yolo # yolo yoloe rtdetr yoloworld
-ckpt=runs/segment/yolo12l/weights/last.pt
-data=tasks/cfg/datasets/segment.yaml
+ckpt=ckpt/yolo11l-seg.pt
+data=tasks/cfg/datasets/gleason.yaml
 epoches=500
 patience=100
 image_size=1024
 gpu_ids='1,2,3,4,5'
-batch=5
-lr=0.01
-name=yolo12l
-python tasks/train.py --model $model --ckpt $ckpt --data $data --epoches $epoches --image_size $image_size --gpu_ids $gpu_ids --batch $batch --lr0 $lr --name $name --resume
+batch=40
+#lr=0.01
+name=gleason
+project=runs/gleason
+python tasks/train.py --model $model --ckpt $ckpt --data $data --epoches $epoches --image_size $image_size --gpu_ids $gpu_ids --batch $batch --name $name --project $project #--resume
 #echo --model $model --ckpt $ckpt --data $data --epoches $epoches --image_size $image_size --gpu_ids $gpu_ids --batch $batch --lr0 $lr --name $name # --resume
