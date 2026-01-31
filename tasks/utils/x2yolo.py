@@ -144,9 +144,9 @@ class GeoJSON2YOLO(X2YOLO):
             geom = row.geometry
 
             fill_value = -1
-            if row['classification'] is None:
-                fill_value = 2
-            elif 'classification' in row and row['classification']:
+            # if row['classification'] is None:
+            #     fill_value = 2
+            if 'classification' in row and row['classification']:
                 cls = row['classification']
                 if isinstance(cls, str):
                     cls = json.loads(cls)

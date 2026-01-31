@@ -7,7 +7,7 @@ from PIL import Image
 base = '/NAS145/liaolinbo/Data/GlandSeg/gleason/dataset/train'
 IMAGES_DIR = base + '/images'
 MASKS_DIR = base + '/masks'
-TARGET_FOLDER = '/NAS145/liaolinbo/Data/GlandSeg/gleason/dataset2/train'
+TARGET_FOLDER = '/NAS145/liaolinbo/Data/GlandSeg/gleason/dataset3/train'
 
 # 确保目标文件夹存在
 os.makedirs(os.path.join(TARGET_FOLDER, 'images'), exist_ok=True)
