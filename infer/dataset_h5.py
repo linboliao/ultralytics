@@ -1,3 +1,4 @@
+import cv2
 import h5py
 import numpy as np
 import pandas as pd
@@ -68,6 +69,10 @@ class Whole_Slide_Bag_FP(Dataset):
 
         try:
             img = self.wsi.read_region(coord, self.patch_level, (self.patch_size, self.patch_size)).convert('RGB')
+            if isinstance(img, Image.Image):
+                img = img.convert('RGB')
+            else:
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         except Exception as e:
             print('Failed to read region: {},{}'.format(*coord))
             print('Exception: {}'.format(e))
@@ -76,7 +81,8 @@ class Whole_Slide_Bag_FP(Dataset):
 
         if self.target_patch_size is not None:
             img = img.resize(self.target_patch_size)
-        img = self.roi_transforms(img)
+        if self.roi_transforms is not None:
+            img = self.roi_transforms(img)
         return img, coord
 
 

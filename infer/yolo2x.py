@@ -73,7 +73,7 @@ class YOLO2GeoJsonDetect(YOLO2X):
 
         for count, (batch, coords) in enumerate(pbar):
             with torch.no_grad():
-                batch = batch.to(device, non_blocking=True)
+                # batch = batch.to(device, non_blocking=True)
                 results = []
                 for idx, model in enumerate(self.models):
                     results.append(model(batch, device='0', agnostic_nms=True, iou=0.4, verbose=False))
@@ -90,7 +90,7 @@ class YOLO2GeoJsonDetect(YOLO2X):
                             if j == len(boxes) - 1:
                                 conf.extend(box.conf)
                             else:
-                                conf.extend(box.conf.detach().clone() * 0.8)
+                                conf.extend(box.conf.detach().clone() * 0.1)
                     if xyxy:
                         xyxy_tensor = torch.stack(xyxy, dim=0)
                         conf_tensor = torch.stack(conf, dim=0)
@@ -133,7 +133,7 @@ class YOLO2GeoJsonDetect(YOLO2X):
                         y2 = y2 + coord[1]
                         area = (x2 - x1) * (y2 - y1)
                         confidence = conf_list[i]
-                        if confidence < 0.6 and area > 1024 * 1024 * 0.75 and abs((x2 - x1) - (y2 - y1)) < 150:
+                        if confidence < 0.6 and area > 2048 * 2048 * 0.75 and abs((x2 - x1) - (y2 - y1)) < 150:
                             continue
                         if confidence < THRESHOLD and cls_list[i] == 1:
                             continue
