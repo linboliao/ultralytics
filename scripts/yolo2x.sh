@@ -7,7 +7,7 @@ export MKL_SERVICE_FORCE_INTEL=1
 model=yolo
 task=detect
 data_coors_dir=/NAS145/liaolinbo/Data/MXB/301/patch_0_2048
-data_slide_dir=/NAS145/liaolinbo/Data/MXB/301/slides
+data_slide_dir=/NAS145/liaolinbo/Data/MXB/301/slides2
 
 ckpts='runs/detect/yolo11s_0512/weights/best.pt;runs/detect/yolo11s_0702/weights/best.pt;runs/detect/cbam/weights/best.pt;runs/detect/pki/weights/best.pt'
 
@@ -15,7 +15,7 @@ slide_ext='.kfb;.svs'
 batch_size=1
 output_dir=/NAS145/liaolinbo/Data/MXB/301/yolo
 
-CUDA_VISIBLE_DEVICES=0 python infer/new.py --data_coors_dir $data_coors_dir --data_slide_dir $data_slide_dir --ckpts $ckpts --slide_ext $slide_ext --batch_size $batch_size --model $model --output_dir $output_dir --task $task
+CUDA_VISIBLE_DEVICES=0 python infer/yolo2x2.py --data_coors_dir $data_coors_dir --data_slide_dir $data_slide_dir --ckpts $ckpts --slide_ext $slide_ext --batch_size $batch_size --model $model --output_dir $output_dir --task $task
 #echo --data_coors_dir $data_coors_dir --data_slide_dir $data_slide_dir --ckpts $ckpts --slide_ext $slide_ext --batch_size $batch_size --model $model --output_dir $output_dir --task $task
 
 
