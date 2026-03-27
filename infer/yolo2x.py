@@ -1,402 +1,135 @@
-import argparse
-import glob
+import copy
 import json
 import os
-import time
+import shutil
+import sys
+import traceback
 import uuid
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cv2
 import numpy as np
+import openslide
 import pandas as pd
 import torch
-from shapely.geometry import Polygon
-from shapely.ops import unary_union
-from torch.utils.data import DataLoader
-from torchvision import transforms, ops
+import torchvision
+from PIL import Image
+from loguru import logger
 from tqdm import tqdm
 
-from infer.dataset_h5 import Whole_Slide_Bag_FP
-from tasks.wsi import WSIOperator
-from ultralytics import YOLO, YOLOE, RTDETR, YOLOWorld
-from ultralytics.engine.results import Boxes
+from ultralytics import YOLO
+from ultralytics.engine.results import Results
+import xml.etree.ElementTree as ET
+import warnings
 
-THRESHOLD = 0.2
+warnings.filterwarnings("ignore")
+
+import argparse
+
+sys.path.insert(0, r'/data2/lbliao/Code/aslide/')
+from aslide import Aslide
+
+Image.MAX_IMAGE_PIXELS = None
 
 
-class YOLO2X:
-    def __init__(self, model, ckpts):
+def is_background(img, threshold=20):
+    img_array = np.array(img)
+    diff = np.ptp(img_array, axis=2)  # ptp直接计算max-min
+    return (diff > threshold).mean() < 0.15
+
+
+class Result:
+    def __init__(self, opt):
+        self.slide_dir = opt.slide_dir if opt.slide_dir else os.path.join(opt.data_root, f'slides')
+        self.slide_list = opt.slide_list
+        self.gpu = opt.gpu
         self.models = []
-        if model == 'yolo':
-            model = YOLO
-        elif model == 'rtdetr':
-            model = RTDETR
-        elif model == 'yoloe':
-            model = YOLOE
-        elif model == 'yoloworld':
-            model = YOLOWorld
-        else:
-            raise ValueError(f"Unsupported model type: {model}")
+        for ckpt in opt.ckpts.split(';'):
+            self.models.append(YOLO(ckpt))
 
-        for ckpt in ckpts:
-            self.models.append(model(ckpt))
+        self.patch_size = opt.patch_size
+        self.infer_size = opt.infer_size
+        self.csv_path = opt.csv_path
 
-    def infer(self, **kwargs):
+        self.output_dir = opt.output_dir if opt.output_dir else os.path.join(opt.data_root, f'results/')
+        os.makedirs(os.path.dirname(self.output_dir), exist_ok=True)
+        self.show_level = opt.show_level
+
+        self.label_dict = {0: 'Benign', 1: 'Malignant', 2: 'vessel', 4: 'epithelium', 3: 'ganglion'}
+        self.color_dict = {'Benign': [0, 255, 0], 'Malignant': [255, 0, 0], 'burn': [0, 0, 255], 'vessel': [255, 255, 0], 'epithelium': [255, 0, 255], 'ganglion': [0, 255, 255]}
+        self.slide = opt.slide if opt.slide else None
+
+    def infer(self, img, gpu):
         raise NotImplementedError()
 
-    def post_process(self, **kwargs):
+    def process(self, data):
+        # data: img, slide
         raise NotImplementedError()
 
-
-class YOLO2GeoJsonDetect(YOLO2X):
-    def __init__(self, model, ckpts):
-        super().__init__(model, ckpts)
-        self.labels = {0: 'Benign', 1: 'Malignant', 2: 'Other', 3: 'Other', 4: 'Other'}
-        self.colors = {'Benign': [0, 255, 0], 'Malignant': [255, 0, 0], 'Other': [128, 128, 128]}
-
-    def infer(self, loader):
-        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-        results_list = []
-        coords_list = []
-        pbar = tqdm(loader, desc="Inference", ncols=100)
-
-        def cal_area(xyxy_tensor):
-            """计算边界框面积之和"""
-            if len(xyxy_tensor) == 0:
-                return 0.0
-            x1 = xyxy_tensor[:, 0]
-            y1 = xyxy_tensor[:, 1]
-            x2 = xyxy_tensor[:, 2]
-            y2 = xyxy_tensor[:, 3]
-            widths = x2 - x1
-            heights = y2 - y1
-            areas = widths * heights
-            return torch.sum(areas).item()
-
-        for count, (batch, coords) in enumerate(pbar):
-            with torch.no_grad():
-                batch = batch.to(device, non_blocking=True)
-                # 通过所有模型进行推理
-                results = []
-                for idx, model in enumerate(self.models):
-                    results.append(model(batch, device='0', agnostic_nms=True, iou=0.4, verbose=False, conf=0.2))
-
-                result = []
-                for idx in range(batch.size(0)):
-
-                    xyxy_all, conf_all, cls_all = [], [], []
-                    boxes = [item[idx].boxes for item in results]
-
-                    for j, box in enumerate(boxes):
-                        if len(box) > 0:
-                            xyxy_all.extend(box.xyxy)
-                            cls_all.extend(box.cls)
-                            adjusted_conf = []
-                            for i in range(len(box)):
-                                if box.cls[i] != 1:  # 类别不是1
-                                    adjusted_conf.append(box.conf[i] * 0.8)
-                                else:  # 类别是1，保持原置信度
-                                    adjusted_conf.append(box.conf[i])
-
-                            conf_all.extend(torch.stack(adjusted_conf))
-
-                    if xyxy_all:
-                        xyxy_tensor = torch.stack(xyxy_all, dim=0)
-                        conf_tensor = torch.stack(conf_all, dim=0)
-                        cls_tensor = torch.stack(cls_all, dim=0)
-
-                        i_first = ops.nms(xyxy_tensor, conf_tensor, 0.5)
-                        xyxy_A = xyxy_tensor[i_first]
-                        conf_A = conf_tensor[i_first]
-                        cls_A = cls_tensor[i_first]
-
-                        cls1_mask_A = (cls_A == 1)
-                        count_cls1_A = cls1_mask_A.sum().item()
-                        if count_cls1_A > 0:
-                            xyxy_cls1_A = xyxy_A[cls1_mask_A]
-                            area_cls1_A = cal_area(xyxy_cls1_A)
-                        else:
-                            area_cls1_A = 0.0
-
-                        img_area = batch.size(2) * batch.size(3)  # 图像面积
-
-                        # 第一阶段过滤：如果条件满足，去除cls=1的边界框
-                        if count_cls1_A < 3 and area_cls1_A < img_area * 0.2:
-                            keep_mask_A = (cls_A != 1)  # 只保留非cls=1的边界框
-                            xyxy_A = xyxy_A[keep_mask_A]
-                            conf_A = conf_A[keep_mask_A]
-                            cls_A = cls_A[keep_mask_A]
-
-                        # 第二阶段：收集前三个模型的结果（结果B）
-                        xyxy_B, conf_B, cls_B = [], [], []
-                        for j in range(3):  # 只取前三个模型
-                            box = boxes[j]
-                            if len(box) > 0:
-                                xyxy_B.extend(box.xyxy)
-                                cls_B.extend(box.cls)
-                                adjusted_conf = []
-                                for i in range(len(box)):
-                                    if box.cls[i] != 1:  # 类别不是1
-                                        adjusted_conf.append(box.conf[i] * 0.8)
-                                    else:  # 类别是1，保持原置信度
-                                        adjusted_conf.append(box.conf[i])
-
-                                conf_B.extend(torch.stack(adjusted_conf))
-
-                        # 将第一阶段过滤后的结果A与前三个模型的结果B合并
-                        if xyxy_B:
-                            xyxy_tensor_B = torch.stack(xyxy_B, dim=0)
-                            conf_tensor_B = torch.stack(conf_B, dim=0)
-                            cls_tensor_B = torch.stack(cls_B, dim=0)
-                        else:
-                            xyxy_tensor_B = torch.tensor([], device=device)
-                            conf_tensor_B = torch.tensor([], device=device)
-                            cls_tensor_B = torch.tensor([], device=device)
-
-                        # 如果结果A不为空，则与结果B合并
-                        if len(xyxy_A) > 0:
-                            xyxy_combined = torch.cat([xyxy_A, xyxy_tensor_B], dim=0)
-                            conf_combined = torch.cat([conf_A, conf_tensor_B], dim=0)
-                            cls_combined = torch.cat([cls_A, cls_tensor_B], dim=0)
-                        else:
-                            xyxy_combined = xyxy_tensor_B
-                            conf_combined = conf_tensor_B
-                            cls_combined = cls_tensor_B
-
-                        # 第二次NMS合并（合并结果C）
-                        if len(xyxy_combined) > 0:
-                            i_second = ops.nms(xyxy_combined, conf_combined, 0.3)
-                            xyxy_C = xyxy_combined[i_second]
-                            conf_C = conf_combined[i_second]
-                            cls_C = cls_combined[i_second]
-                        else:
-                            xyxy_C = xyxy_combined
-                            conf_C = conf_combined
-                            cls_C = cls_combined
-
-                        cls1_mask_C = (cls_C == 1)
-                        count_cls1_C = cls1_mask_C.sum().item()
-                        if count_cls1_C > 0:
-                            xyxy_cls1_C = xyxy_C[cls1_mask_C]
-                            area_cls1_C = cal_area(xyxy_cls1_C)
-                        else:
-                            area_cls1_C = 0.0
-
-                        if count_cls1_C == 1 or area_cls1_C < img_area * 0.03:
-                            keep_mask_C = (cls_C != 1)  # 只保留非cls=1的边界框
-                            xyxy_C = xyxy_C[keep_mask_C]
-                            conf_C = conf_C[keep_mask_C]
-                            cls_C = cls_C[keep_mask_C]
-
-                        if len(xyxy_C) > 0:
-                            conf_C = conf_C.unsqueeze(1)  # 增加维度
-                            cls_C = cls_C.unsqueeze(1)
-                            box_tensor = torch.cat([xyxy_C, conf_C, cls_C], dim=1)
-                            result.append(Boxes(box_tensor, (batch.shape[2], batch.shape[3])))
-                        else:
-                            result.append(None)
-                    else:
-                        result.append(None)
-
-                results_list.append(result)
-                coords_list.append(coords)
-
-        self.tissue_area = batch.shape[2] * batch.shape[3] * len(loader)
-        return results_list, coords_list
-
-    def post_process(self, results_list, coords_list, output_path):
-        features = []
-        malignant_polygons= []
-        for results, coords in zip(results_list, coords_list):
-            for boxes, coord in zip(results, coords):
-                coord = coord.to('cpu').tolist()
-                if boxes is not None:
-                    xyxy_list = boxes.xyxy.cpu().tolist()
-                    conf_list = boxes.conf.cpu().tolist()
-                    cls_list = boxes.cls.cpu().tolist()
-                    for i in range(len(xyxy_list)):
-                        confidence = conf_list[i]
-                        if confidence < THRESHOLD and cls_list[i] == 1:
-                            continue
-
-                        x1, y1, x2, y2 = xyxy_list[i]
-
-                        x1 = x1 + coord[0]
-                        y1 = y1 + coord[1]
-                        x2 = x2 + coord[0]
-                        y2 = y2 + coord[1]
-
-                        polygon_coordinates = [[[x1, y1], [x2, y1], [x2, y2], [x1, y2], [x1, y1]]]
-                        label = self.labels[cls_list[i]]
-                        if cls_list[i] == 1:
-                            rect = Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
-                            malignant_polygons.append(rect)
-
-                        feature = {
-                            "type": "Feature",
-                            "id": str(uuid.uuid4()),
-                            "geometry": {
-                                "type": "Polygon",
-                                "coordinates": polygon_coordinates
-                            },
-                            "properties": {
-                                "name": f'{confidence:.2f}',
-                                "classification": {
-                                    "name": label,
-                                    "color": self.colors[label]
-                                }
-                            }
-                        }
-                        features.append(feature)
-        geojson_dict = {
-            "type": "FeatureCollection",
-            "features": features
-        }
-
-        if malignant_polygons:
-            merged_malignant = unary_union(malignant_polygons)
-            if merged_malignant.geom_type == 'MultiPolygon':
-                malignant_area = sum(poly.area for poly in merged_malignant.geoms)
-            else:
-                malignant_area = merged_malignant.area
+    def open_slide(self, slide):
+        base, ext = os.path.splitext(slide)
+        slide_path = os.path.join(self.slide_dir, slide)
+        if ext == '.kfb':
+            wsi = Aslide(slide_path)
+        elif ext == '.tif':
+            wsi = Image.open(slide_path)
+            wsi.level_dimensions = [[wsi.size[0], wsi.size[1]]]
+            wsi.mpp = 20
         else:
-            malignant_area = 0.0
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(geojson_dict, f, indent=2, ensure_ascii=False)
+            wsi = openslide.OpenSlide(slide_path)
+            wsi.mpp = int(wsi.properties.get('aperio.AppMag', '20'))
+        return wsi
 
-    self.malignant_area = malignant_area
+    @property
+    def slides(self):
+        # 1. 初步候选列表
+        candidates = (
+            self.slide_list if getattr(self, "slide_list", None) else
+            [self.slide] if getattr(self, "slide", None) else
+            [f for f in os.listdir(self.slide_dir)
+             if os.path.isfile(os.path.join(self.slide_dir, f))]
+        )
 
-
-class YOLO2GeoJsonSegment(YOLO2X):
-    def __init__(self, model, ckpts):
-        super().__init__(model, ckpts)
-        self.labels = {0: 'Benign', 1: 'Malignant', 2: 'Other'}
-        self.colors = {'Benign': [0, 255, 0], 'Malignant': [255, 0, 0], 'Other': [128, 128, 128]}
-
-    def obtain_features(self, results, coords):
-        features = []
-        malignant_area = 0.0
-        for result, coord in zip(results, coords):
-            if not result.masks:
-                continue
-            coord = coord.to('cpu').tolist()
-            masks_tensor = result.masks.data.cpu().numpy()
-            boxes = result.boxes
-            class_ids = boxes.cls.cpu().tolist()
-            confidences = boxes.conf.cpu().tolist()
-
-            if hasattr(result, 'names') and result.names is not None:
-                names_map = result.names
+        # 2. 如果没有 CSV 或 CSV 不存在，直接返回 candidates
+        if not getattr(self, "csv_path", None) or not os.path.exists(self.csv_path):
+            filtered = candidates
+        else:
+            # 读取 CSV 获取 prediction == 1 的 slide_id
+            try:
+                df = pd.read_csv(self.csv_path)
+                positive_ids = set(
+                    df.loc[df["prediction"] == 1, "slide_id"].astype(str).str.strip()
+                )
+            except Exception as e:
+                print(f"读取 {self.csv_path} 失败: {e}")
+                filtered = candidates
             else:
-                names_map = self.labels
+                filtered = [
+                    f for f in candidates
+                    if os.path.splitext(os.path.basename(f))[0] in positive_ids
+                ]
 
-            for idx, (mask, class_id, confidence) in enumerate(zip(masks_tensor, class_ids, confidences)):
-                if confidence < THRESHOLD and class_id == 1:
-                    continue
+        # 3. 排除已经生成过 detect.geojson 的 slide
+        final_slides = [
+            f for f in filtered
+            if not os.path.exists(
+                os.path.join(self.output_dir, f"{os.path.splitext(os.path.basename(f))[0]}-detect.geojson")
+            )
+        ]
 
-                binary_mask = (mask > 0.5).astype(np.uint8) * 255
-                contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                box_coords = boxes.xyxy[idx].cpu().numpy()
-                x1, y1, x2, y2 = box_coords
-                bbox_area = (x2 - x1) * (y2 - y1)
+        return final_slides
+    def run_(self):
+        for slide in self.slides:
+            self.process(slide)
 
-                polygons = []
-                for contour in contours:
-                    contour_area = cv2.contourArea(contour)
-
-                    perimeter = cv2.arcLength(contour, True)
-                    epsilon = 0.02 * perimeter
-                    approx = cv2.approxPolyDP(contour, epsilon, True)
-
-                    if len(approx) == 4 and abs(contour_area - bbox_area) < (bbox_area * 0.1):
-                        continue
-                    if class_id == 1:
-                        malignant_area += contour_area
-                    epsilon = 0.002 * cv2.arcLength(contour, True)
-                    approx_polygon = cv2.approxPolyDP(contour, epsilon, True)
-
-                    if len(approx_polygon) >= 3:
-                        points = approx_polygon.reshape(-1, 2).tolist()
-                        if points[0] != points[-1]:
-                            points.append(points[0])
-                        polygons.append([[point[0] + coord[0], point[1] + coord[1]] for point in points])
-                if not polygons:
-                    continue
-
-                label = names_map.get(int(class_id), "unknown")
-                for polygon in polygons:
-                    feature = {
-                        "type": "Feature",
-                        "id": str(uuid.uuid4()),
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [polygon]
-                        },
-                        "properties": {
-                            "name": f'{confidence:.2f}',
-                            "classification": {
-                                "name": label,
-                                "color": self.colors[label]
-                            }
-                        }
-                    }
-
-                    features.append(feature)
-        self.malignant_area = malignant_area
-        return features
-
-    def infer(self, loader):
-        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-        results_list = []
-        coords_list = []
-        pbar = tqdm(loader, desc="Training Epoch", ncols=100)
-        for count, (batch, coords) in enumerate(pbar):
-            with torch.no_grad():
-                batch = batch.to(device, non_blocking=True)
-                results = self.models[0](batch, device='0', agnostic_nms=True, iou=0.4, verbose=False)
-                features = self.obtain_features(results, coords)
-                results_list.append(features)
-                coords_list.append(None)
-        self.tissue_area = batch.shape[2] * batch.shape[3] * len(loader)
-        return results_list, coords_list
-
-    def post_process(self, results_list, coords_list, output_path):
-        features = []
-        for results in results_list:
-            features.extend(results)
-        geojson_dict = {
-            "type": "FeatureCollection",
-            "features": features
-        }
-
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(geojson_dict, f, indent=2, ensure_ascii=False)
-
-
-def find_all_wsi_paths(wsi_root, extentions):
-    """
-    find the full wsi path under data_root, return a dict {slide_id: full_path}
-    """
-    # to support more than one ext, e.g., support .svs and .mrxs
-    result = {}
-    link_path = os.path.join(wsi_root, 'symlink_record.csv')
-    if os.path.exists(link_path):
-        df = pd.read_csv(link_path)
-        all_paths = df['target'].to_list()
-    else:
-        all_paths = glob.glob(os.path.join(wsi_root, '**'), recursive=True)
-
-    for ext in extentions.split(';'):
-        print('Process format:', ext)
-        ext = ext[1:]
-        paths = [i for i in all_paths if i.split('.')[-1].lower() == ext.lower()]
-        for h in paths:
-            slide_name = os.path.split(h)[1]
-            slide_id = '.'.join(slide_name.split('.')[0:-1])
-            if slide_id != '202535080-26': continue
-            result[slide_id] = h
-    print("found {} wsi".format(len(result)))
-    return result
+    def parallel_run(self):
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(self.process, slide) for slide in self.slides]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    traceback.print_exc()
 
 
 def save_area(area_data, csv_path, key_column='slide_id'):
@@ -426,85 +159,309 @@ def save_area(area_data, csv_path, key_column='slide_id'):
         print(f"创建新的CSV文件并写入数据: {csv_path}")
 
 
+class GeoResults(Result):
+    def __init__(self, opt):
+        super().__init__(opt)
+        self.area = 0
+
+    def infer(self, img, gpu):
+        # img : str or path or PIL.Image or np.ndarray：BGR
+        results = self.models[0](img, device=gpu, agnostic_nms=True, iou=0.4)
+        coords = []
+        labels = []
+        confs = []
+        for result in results:
+            boxes = result.boxes
+            Malignant_area = 0
+            remove_list = []
+            for i, box in enumerate(reversed(boxes)):
+                [x1, y1, x2, y2] = box.xyxy.tolist()[0]
+                label = self.label_dict[int(box.cls.tolist()[0])]
+                if label == "Malignant":
+                    Malignant_area += (x2 - x1) * (y2 - y1)
+                    remove_list.append(i)
+                conf = box.conf.tolist()[0]
+
+                coords.append([x1, y1, x2, y2])
+                labels.append(label)
+                confs.append(conf)
+            if Malignant_area < self.infer_size ** 2 * 0.1:
+                coords = [coords[i] for i in range(len(coords)) if i not in remove_list]
+                labels = [labels[i] for i in range(len(labels)) if i not in remove_list]
+                confs = [confs[i] for i in range(len(confs)) if i not in remove_list]
+        return coords, labels, confs
+
+    def multi_infer(self, img, gpu):
+        # n-1个模型的推理结果
+        coords, labels, confs = [], [], []
+        with torch.no_grad():
+            for model in self.models[:-1]:
+                results = model(img, device=gpu, agnostic_nms=True, iou=0.4, half=True, verbose=False)
+                for result in results:
+                    boxes = result.boxes
+                    for i, box in enumerate(reversed(boxes)):
+                        [x1, y1, x2, y2] = box.xyxy.tolist()[0]
+                        label = self.label_dict[int(box.cls.tolist()[0])]
+                        conf = box.conf.tolist()[0]
+
+                        coords.append([x1, y1, x2, y2])
+                        labels.append(label)
+                        confs.append(conf)
+
+            old_coords = copy.copy(coords)
+            old_labels = copy.copy(labels)
+            old_confs = copy.copy(confs)
+            results = self.models[-1](img, device=gpu, agnostic_nms=True, half=True, verbose=False)
+
+            # n 个模型结果
+            for result in results:
+                boxes = result.boxes
+                for i, box in enumerate(reversed(boxes)):
+                    [x1, y1, x2, y2] = box.xyxy.tolist()[0]
+                    label = self.label_dict[int(box.cls.tolist()[0])]
+                    conf = box.conf.tolist()[0]
+                    if conf < 0.3:
+                        continue
+                    coords.append([x1, y1, x2, y2])
+                    labels.append(label)
+                    confs.append(conf * 0.1)
+
+            if len(coords) > 0:
+                boxes = torch.tensor(coords, dtype=torch.float32)
+                scores = torch.tensor(confs, dtype=torch.float32)
+                # N个模型结果进行NMS
+                i = torchvision.ops.nms(boxes, scores, 0)  # NMS
+                index = i.tolist()
+                coords = [coords[i] for i in index if 0 <= i < len(coords)]
+                labels = [labels[i] for i in index if 0 <= i < len(labels)]
+                confs = [confs[i] for i in index if 0 <= i < len(confs)]
+                idxs = [i for i, label in enumerate(labels) if label == 'Malignant']
+                area = 0
+                for idx in idxs:
+                    [x1, y1, x2, y2] = coords[idx]
+                    area += (x2 - x1) * (y2 - y1)
+                # 获取癌症面积小于0.2 或者数量少于4的时的非癌结果
+                if area < self.patch_size ** 2 * 0.2 or len(idxs) < 4:
+                    coords = [coords[i] for i in range(len(coords)) if i not in idxs]
+                    labels = [labels[i] for i in range(len(labels)) if i not in idxs]
+                    confs = [confs[i] for i in range(len(confs)) if i not in idxs]
+
+                # N-1 个模型 + 前面的非癌结果
+                old_coords.extend(coords)
+                old_labels.extend(labels)
+                old_confs.extend(confs)
+                boxes = torch.tensor(old_coords, dtype=torch.float32)
+                scores = torch.tensor(old_confs, dtype=torch.float32)
+                # 合并
+                i = torchvision.ops.nms(boxes, scores, 0.3)
+                index = i.tolist()
+                #
+                coords = [old_coords[i] for i in index if 0 <= i < len(old_coords)]
+                labels = [old_labels[i] for i in index if 0 <= i < len(old_coords)]
+                confs = [old_confs[i] for i in index if 0 <= i < len(old_coords)]
+                # 挑选有癌的结果
+                idxs = [i for i, label in enumerate(labels) if label == 'Malignant']
+                area = 0
+                for idx in idxs:
+                    [x1, y1, x2, y2] = coords[idx]
+                    area += (x2 - x1) * (y2 - y1)
+                # 当癌去极小或者数量为1 时 去除癌区结果
+                if area < self.patch_size ** 2 * 0.03 or len(idxs) == 1:
+                    coords = [coords[i] for i in range(len(coords)) if i not in idxs]
+                    labels = [labels[i] for i in range(len(labels)) if i not in idxs]
+                    confs = [confs[i] for i in range(len(confs)) if i not in idxs]
+
+        return coords, labels, confs
+
+    def process(self, slide):
+        base, ext = os.path.splitext(slide)
+        slide_path = os.path.join(self.slide_dir, slide)
+        if ext == '.kfb':
+            wsi = Aslide(slide_path)
+            width, height = wsi.level_dimensions[0]
+            mpp = wsi.mpp
+        elif ext == '.tif':
+            wsi = Image.open(slide_path)
+            width, height = wsi.size[0], wsi.size[1]
+            mpp = 20
+        else:
+            wsi = openslide.OpenSlide(slide_path)
+            width, height = wsi.level_dimensions[0]
+            mpp = int(wsi.properties.get('aperio.AppMag', '20'))
+        step = int(self.patch_size * (mpp / 20))
+        patch_count = 0
+        t_coords, t_labels, t_confs = [], [], []
+        times = width // wsi.level_dimensions[self.show_level][0]
+
+        for w_s in range(0, width - step, step):
+            for h_s in range(0, height - step, step):
+                if ext == '.tif':
+                    input_img = wsi.crop((w_s, h_s, w_s + step, h_s + step))
+                else:
+                    input_img = wsi.read_region((w_s, h_s), 0, (step, step))
+                if is_background(input_img):
+                    continue
+                if isinstance(input_img, Image.Image):
+                    input_img = input_img.convert('RGB')
+                else:
+                    input_img = cv2.cvtColor(input_img, cv2.COLOR_RGB2BGR)
+
+                # coords, labels, confs = self.multi_infer(input_img, self.gpu)
+                coords, labels, confs = self.infer(input_img, self.gpu)
+                for (x1, y1, x2, y2) in coords:
+                    x1 = int(x1 + w_s)
+                    y1 = int(y1 + h_s)
+                    x2 = int(x2 + w_s)
+                    y2 = int(y2 + h_s)
+                    coord = [[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]
+                    coord = [[item // times for item in sublist] for sublist in coord]
+                    t_coords.append([coord])
+                t_confs.extend(confs)
+                t_labels.extend(labels)
+                patch_count += 1
+
+        self.post_process(t_coords, t_labels, t_confs, base, patch_count)
+
+    def cal_rate(self, coords, labels):
+        Malignant_area = 0
+        for coord, label in zip(coords, labels):
+            x_list = [x[0] for x in coord[0]]
+            y_list = [x[1] for x in coord[0]]
+            x1 = min(x_list)
+            x2 = max(x_list)
+            y1 = min(y_list)
+            y2 = max(y_list)
+            if label == 'Malignant':
+                Malignant_area += (x2 - x1) * (y2 - y1)
+        return Malignant_area * 0.7
+
+    def post_process(self, coords, labels, confs, base, patch_count):
+        feature_template = {
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": None},
+            "properties": {
+                "objectType": "annotation",
+                "classification": {"name": None, "color": None}
+            }
+        }
+
+        features = [
+            {
+                **feature_template,  # 复制模板
+                "id": str(uuid.uuid4()),  # 生成唯一 ID
+                "geometry": {"type": "Polygon", "coordinates": coord},  # 填充坐标
+                "properties": {
+                    "name": f'{conf:.4f}',
+                    "classification": {
+                        "name": label,
+                        "color": self.color_dict[label]  # 填充颜色
+                    }
+                }
+            }
+            for coord, label, conf in zip(coords, labels, confs) if label == "Malignant"
+        ]
+
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+        if len(features) > 0:
+            output_path = os.path.join(self.output_dir, f"{base}-detect.geojson")
+            with open(output_path, 'w') as f:
+                json.dump(geojson, f, indent=2)
+            logger.info(f'generated {base}.geojson contour json!!!')
+
+        malignant_area = self.cal_rate(coords, labels)
+        total_area = patch_count * self.patch_size ** 2
+        area_data = [{'slide_id': base, 'area': f'{malignant_area / total_area * 100:.4f}%'}]
+        area_path = os.path.join(self.output_dir, f"area.csv")
+        save_area(area_data, area_path)
+
+
+class MultiGeoResults(GeoResults):
+    def process(self, slide):
+
+        wsi = self.open_slide(slide)
+        width, height = wsi.level_dimensions[0]
+
+        step = int(self.patch_size * (wsi.mpp / 20))
+        times = wsi.level_dimensions[0][0] // wsi.level_dimensions[self.show_level][0]
+
+        coordinates = [
+            (w, h)
+            for w in range(0, width - step, step)
+            for h in range(0, height - step, step)
+        ]
+
+        total_patches = len(coordinates)
+
+        t_coords, t_labels, t_confs = [], [], []
+
+        def read_region(coord):
+            input_img = wsi.read_region(coord, 0, (step, step))
+            input_img = input_img.convert("RGB")
+
+            if is_background(input_img):
+                return None
+
+            with torch.no_grad():
+                coords, labels, confs = self.multi_infer(input_img, self.gpu)
+
+            return coord, coords, labels, confs
+
+        print(f"\nProcessing slide: {slide}")
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(read_region, c) for c in coordinates]
+
+            # ✅ 进度条在主线程更新
+            with tqdm(total=total_patches, desc="Infer Patches", ncols=100) as pbar:
+                patch_count = 0
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+
+                        if result is not None:
+                            patch_count +=1
+                            coord, coords, labels, confs = result
+
+                            for (x1, y1, x2, y2) in coords:
+                                x1 += coord[0]
+                                y1 += coord[1]
+                                x2 += coord[0]
+                                y2 += coord[1]
+
+                                poly = [[x1, y1], [x1, y2], [x2, y2], [x2, y1], [x1, y1]]
+                                poly = [[p // times for p in pt] for pt in poly]
+
+                                t_coords.append([poly])
+
+                            t_labels.extend(labels)
+                            t_confs.extend(confs)
+
+
+                    except Exception:
+                        traceback.print_exc()
+
+                    # 每完成一个 patch 更新一次
+                    pbar.update(1)
+
+        base = os.path.splitext(slide)[0]
+        self.post_process(t_coords, t_labels, t_confs, base, patch_count)
+
+
 parser = argparse.ArgumentParser(description='YOLO to X')
-parser.add_argument('--data_coors_dir', type=str, default=None)
-parser.add_argument('--data_slide_dir', type=str, default=None)
+parser.add_argument('--slide_dir', type=str, default=None)
+parser.add_argument('--gpu', type=str, default='0', help='patch directory')
 parser.add_argument('--ckpts', type=str, default=None)
-parser.add_argument('--slide_ext', type=str, default='.svs')
-parser.add_argument('--batch_size', type=int, default=6)
-parser.add_argument('--model', type=str)
-parser.add_argument('--task', type=str)
-parser.add_argument('--output_dir', type=str)
-
-args = parser.parse_args()
-
+parser.add_argument('--patch_size', type=int, default=2048, help='patch size')
+parser.add_argument('--infer_size', type=int, default=1536, help='infer size')
+parser.add_argument('--csv_path', type=str, default=None, help='csv path')
+parser.add_argument('--slide', type=str, default='')
+parser.add_argument('--slide_list', type=list, default=[])
+parser.add_argument('--output_dir', type=str, default='/NAS145/liaolinbo/Data/MXB/301/yolo2')
+parser.add_argument('--show_level', type=int, default=0)
 if __name__ == '__main__':
-    process_start_time = time.time()
-    print('initializing dataset')
-
-    exist_idxs = []
-    all_wsi_paths = find_all_wsi_paths(args.data_slide_dir, args.slide_ext)
-    total = len(all_wsi_paths)
-    print('Total number of WSIs:', total)
+    args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
-    dest_files = os.listdir(args.output_dir)
-    for slide_id in all_wsi_paths.keys():
-        h5_file_path = str(os.path.join(args.data_coors_dir, 'patches', slide_id + '.h5'))
-        if not os.path.exists(h5_file_path):
-            print(h5_file_path, 'does not exist ...')
-            continue
-        # elif slide_id + f'-{args.task}.geojson' in dest_files:
-        #     print('geojosn file exist, skip {}'.format(slide_id))
-        #     continue
-        else:
-            exist_idxs.append(slide_id)
-
-    ckpts = args.ckpts.split(';')
-    if args.task == 'detect':
-        converter = YOLO2GeoJsonDetect(args.model, ckpts)
-    elif args.task == 'segment':
-        converter = YOLO2GeoJsonSegment(args.model, ckpts)
-    else:
-        raise ValueError('Unknown task: {}'.format(args.task))
-
-    print('WSIs need to be processed: {} of {}'.format(len(exist_idxs), total))
-    area_data = []
-    for index, slide_id in enumerate(exist_idxs):
-        h5_file_path = str(os.path.join(args.data_coors_dir, 'patches', slide_id + '.h5'))
-        slide_file_path = all_wsi_paths[slide_id]
-
-        print('Time:', datetime.now().strftime('"%Y-%m-%d, %H:%M:%S"'))
-        print('\nprogress: {}/{}, slide_id: {}'.format(index, len(exist_idxs), slide_id))
-
-        output_path = os.path.join(args.output_dir, slide_id + f'-{args.task}.geojson')
-
-        one_slide_start = time.time()
-        try:
-            wsi = WSIOperator(slide_file_path)
-        except:
-            print('Failed to read WSI:', slide_file_path)
-            continue
-
-        custom_transformer = transforms.Compose([
-            transforms.ToTensor(),
-        ])
-
-        dataset = Whole_Slide_Bag_FP(file_path=h5_file_path, wsi=wsi, pretrained=True, custom_transforms=custom_transformer, fast_read=True)
-        if slide_file_path.endswith('.svs'):
-            kwargs = {'num_workers': 8, 'pin_memory': True}
-            print('Data Loader args:', kwargs)
-            loader = DataLoader(dataset=dataset, batch_size=args.batch_size, **kwargs, prefetch_factor=16)
-        else:
-            kwargs = {'num_workers': 1, 'pin_memory': True}
-            print('Data Loader args:', kwargs)
-            loader = DataLoader(dataset=dataset, batch_size=args.batch_size, **kwargs)
-        results, coords = converter.infer(loader)
-        converter.post_process(results, coords, output_path)
-        area_data.append({'slide_id': slide_id, 'area': f'{converter.malignant_area / converter.tissue_area * 100:.4f}%'})
-        # print(f'malignant tissue area: {converter.malignant_area}; all tissue area: {converter.tissue_area}  Proportion of malignant tissue: {converter.malignant_area / converter.tissue_area * 100:.4f} %')
-
-        print('time per slide: {:.1f}'.format(time.time() - one_slide_start))
-    if area_data:
-        save_area(area_data, os.path.join(args.output_dir, 'area.csv'))
-    print('Time used for this dataset:{:.1f}'.format(time.time() - process_start_time))
-    print('Inference ends', end='')
+    MultiGeoResults(args).parallel_run()
